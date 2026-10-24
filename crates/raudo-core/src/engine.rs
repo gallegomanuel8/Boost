@@ -1,6 +1,6 @@
 //! Segmented HTTP download engine.
 //!
-//! Strategy (taken from the analysis of IDM, see analisis/HALLAZGOS_IDMan.md §2):
+//! Strategy (dynamic segmentation, as in classic download accelerators):
 //! * the first connection asks for `bytes=0-` and keeps streaming the whole file;
 //! * whenever a connection slot is free, the active segment with the largest
 //!   *estimated* remaining work (`remaining - speed * horizon`) is split in two
@@ -9,7 +9,7 @@
 //! * every extra connection must answer `206` with the exact `Content-Range`,
 //!   otherwise the server is treated as not supporting ranges.
 //!
-//! Unlike IDM, all connections write into one preallocated file with positional
+//! Unlike those, all connections write into one preallocated file with positional
 //! writes, so there is no "rebuild" step at the end.
 
 use std::fs::{File, OpenOptions};

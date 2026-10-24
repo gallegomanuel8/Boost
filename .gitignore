@@ -12,3 +12,9 @@
 /web-ext-artifacts/
 /extension/.amo-upload-uuid
 /crates/raudo-app/gen/
+
+# Private notes and design drafts (reverse-engineering notes are not published)
+/analisis/
+/DISEÑO.md
+# Source of the app icon; the generated icons live in crates/raudo-app/icons
+/BoostIcon.zip

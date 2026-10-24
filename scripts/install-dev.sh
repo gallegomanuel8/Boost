@@ -17,7 +17,10 @@ CHROME_ID="boloeecmdjhgdkcahinhhpakjhiljbhi"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 # The app was called raudo before Boost: its launcher and icon are removed on install.
-OLD_APP=("$BIN/raudo" "$APPS_DIR/org.raudo.app.desktop" "$ICONS/128x128/apps/raudo.png")
+# Icons named just "boost" lose against icon themes that ship a "boost" action icon
+# (Breeze, Papirus...), so they are installed under the app ID instead.
+OLD_APP=("$BIN/raudo" "$APPS_DIR/org.raudo.app.desktop" "$ICONS/128x128/apps/raudo.png"
+    "$ICONS"/{32x32,128x128,256x256,512x512}/apps/boost.png)
 
 # Regular browsers are registered by `raudo-nmhost register`. Firefox reads user
 # manifests from ~/.mozilla even when its profile uses the XDG layout
@@ -55,7 +58,7 @@ uninstall() {
     done
     [[ -x "$BIN/raudo-nmhost" ]] && "$BIN/raudo-nmhost" unregister >/dev/null
     rm -f "${OLD_APP[@]}" "$BIN/boost" "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
-    rm -f "$APPS_DIR/org.boost.app.desktop" "$ICONS"/{32x32,128x128,256x256,512x512}/apps/boost.png
+    rm -f "$APPS_DIR/org.boost.app.desktop" "$ICONS"/{32x32,128x128,256x256,512x512}/apps/org.boost.app.png
     rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
     echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
 }
@@ -81,10 +84,10 @@ fi
 
 echo "==> application menu entry"
 rm -f "${OLD_APP[@]}"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/32x32.png" "$ICONS/32x32/apps/boost.png"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128.png" "$ICONS/128x128/apps/boost.png"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128@2x.png" "$ICONS/256x256/apps/boost.png"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/icon.png" "$ICONS/512x512/apps/boost.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/32x32.png" "$ICONS/32x32/apps/org.boost.app.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128.png" "$ICONS/128x128/apps/org.boost.app.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128@2x.png" "$ICONS/256x256/apps/org.boost.app.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/icon.png" "$ICONS/512x512/apps/org.boost.app.png"
 mkdir -p "$APPS_DIR"
 cat > "$APPS_DIR/org.boost.app.desktop" <<EOF
 [Desktop Entry]
@@ -93,7 +96,7 @@ Name=Boost
 GenericName=Gestor de descargas
 Comment=Descarga ficheros y vídeos con varias conexiones
 Exec=$BIN/boost %u
-Icon=boost
+Icon=org.boost.app
 Terminal=false
 Categories=Network;FileTransfer;
 StartupWMClass=boost
@@ -102,6 +105,8 @@ EOF
 update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
 xdg-mime default org.boost.app.desktop x-scheme-handler/boost
 gtk-update-icon-cache -q -t "$ICONS" >/dev/null 2>&1 || true
+# KDE caches menu entries and their icons.
+kbuildsycoca6 >/dev/null 2>&1 || true
 
 # Boost runs only while the app is open: no background service at login. The
 # extension offers to launch it (sandboxed browsers through the boost: link).
