@@ -13,6 +13,8 @@ OLD_DBUS_SERVICE="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.raudo
 AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/raudo-daemon.desktop"
 HOST_NAME="org.raudo.nmhost"
 CHROME_ID="boloeecmdjhgdkcahinhhpakjhiljbhi"
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICON="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps/raudo.png"
 
 # Regular browsers are registered by `raudo-nmhost register`. Firefox reads user
 # manifests from ~/.mozilla even when its profile uses the XDG layout
@@ -49,7 +51,8 @@ uninstall() {
         fi
     done
     [[ -x "$BIN/raudo-nmhost" ]] && "$BIN/raudo-nmhost" unregister >/dev/null
-    rm -f "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
+    rm -f "$BIN/raudo" "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
+    rm -f "$APPS_DIR/org.raudo.app.desktop" "$ICON"
     rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
     echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
 }
@@ -60,11 +63,11 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 fi
 
 echo "==> building release binaries"
-(cd "$ROOT" && cargo build --release --quiet -p raudo-daemon -p raudo-cli -p raudo-nmhost)
+(cd "$ROOT" && cargo build --release --quiet -p raudo-app -p raudo-daemon -p raudo-cli -p raudo-nmhost)
 
 echo "==> installing binaries into $BIN"
 mkdir -p "$BIN"
-for b in raudo-daemon raudo-cli raudo-nmhost; do
+for b in raudo raudo-daemon raudo-cli raudo-nmhost; do
     install -m 755 "$ROOT/target/release/$b" "$BIN/$b"
 done
 
@@ -72,6 +75,23 @@ if [[ -f "$OLD_DBUS_SERVICE" ]]; then
     rm -f "$OLD_DBUS_SERVICE"
     busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 fi
+
+echo "==> application menu entry"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128.png" "$ICON"
+mkdir -p "$APPS_DIR"
+cat > "$APPS_DIR/org.raudo.app.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=raudo
+GenericName=Gestor de descargas
+Comment=Descarga ficheros y vídeos con varias conexiones
+Exec=$BIN/raudo
+Icon=raudo
+Terminal=false
+Categories=Network;FileTransfer;
+StartupWMClass=raudo
+EOF
+update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
 
 echo "==> autostart with the session"
 # Sandboxed browsers cannot start the service themselves; this keeps it available.

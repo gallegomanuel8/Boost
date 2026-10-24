@@ -36,6 +36,10 @@ pub enum Call {
     SetMaxConcurrent { n: u32 },
     Formats(Request),
     Inspect { target: String, request: Request },
+    /// Where one download stands: its file, folder and segment map.
+    Details { id: i64 },
+    /// Speed limit, parallel downloads, download folder.
+    Settings,
     Subscribe,
     Ping,
 }
@@ -169,6 +173,14 @@ impl Client {
     pub async fn formats(&mut self, request: Request) -> Result<MediaInfo> {
         Self::parse(self.call(Call::Formats(request)).await?)
     }
+    pub async fn settings(&mut self) -> Result<Value> {
+        self.call(Call::Settings).await
+    }
+
+    pub async fn details(&mut self, id: i64) -> Result<Value> {
+        self.call(Call::Details { id }).await
+    }
+
     pub async fn inspect(&mut self, target: &str, request: Request) -> Result<Value> {
         self.call(Call::Inspect { target: target.to_owned(), request }).await
     }

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>raudo</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="toolbar">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="var(--accent)"/><path d="M12 6v9M8 11.5l4 4 4-4M7.5 18h9" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>raudo</span>
+  </div>
+  <button type="button" class="btn primary" id="btn-add">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    Añadir URL
+  </button>
+  <div class="group">
+    <button type="button" class="btn" id="btn-resume" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>Reanudar</button>
+    <button type="button" class="btn" id="btn-pause" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>Pausar</button>
+    <button type="button" class="btn" id="btn-remove" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Eliminar</button>
+  </div>
+  <div class="group">
+    <button type="button" class="btn" id="btn-pause-all" title="Pausar todas las descargas">Pausar todas</button>
+    <button type="button" class="btn" id="btn-settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Preferencias</button>
+  </div>
+  <label class="search">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>
+    <span class="sr">Buscar descargas</span>
+    <input type="search" id="search" placeholder="Buscar…">
+  </label>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<div class="body">
+  <nav class="side" id="cats" aria-label="Categorías"></nav>
+
+  <main>
+    <div class="table-wrap">
+      <div role="table" aria-label="Descargas" class="table">
+        <div role="row" class="row head">
+          <span role="columnheader">Nombre</span>
+          <span role="columnheader">Tamaño</span>
+          <span role="columnheader">Progreso</span>
+          <span role="columnheader">Velocidad</span>
+          <span role="columnheader">Restante</span>
+          <span role="columnheader">Estado</span>
+        </div>
+        <div id="rows"></div>
+        <p id="empty" class="empty" hidden>No hay descargas en esta categoría.</p>
+      </div>
+    </div>
+
+    <section class="details" id="details" aria-label="Detalles" hidden>
+      <div class="col">
+        <div class="d-name" id="d-name"></div>
+        <div class="muted small ellipsis" id="d-url"></div>
+        <div class="muted small ellipsis" id="d-folder"></div>
+        <div class="err small" id="d-error" hidden></div>
+      </div>
+      <div class="col">
+        <div class="muted small" id="d-conn"></div>
+        <div class="segmap" id="d-map" aria-hidden="true"></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn" id="btn-reveal">Abrir carpeta</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer class="status">
+  <span id="f-active"></span>
+  <span id="f-speed"></span>
+  <span id="f-limit"></span>
+  <span id="f-engine"></span>
+</footer>
+
+<!-- New download -->
+<dialog id="dlg-add" class="dlg" aria-labelledby="add-title">
+  <form method="dialog" id="add-form">
+    <div class="dlg-head"><h1 id="add-title">Nueva descarga</h1><button type="button" class="icon-btn" data-close aria-label="Cerrar">✕</button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Dirección (URL)</span>
+        <input type="url" id="add-url" required placeholder="https://…" autocomplete="off"></label>
+
+      <div class="probe" id="add-probe" hidden>
+        <span class="probe-badge" id="add-badge"></span>
+        <div class="probe-text"><span class="ellipsis strong" id="add-ptitle"></span><span class="muted small" id="add-pmeta"></span></div>
+      </div>
+
+      <div role="radiogroup" aria-label="Qué descargar" class="choices" id="add-modes" hidden>
+        <button type="button" role="radio" class="choice" data-mode="video"><span class="strong">Vídeo</span><span class="muted small">Imagen y sonido, elige la calidad</span></button>
+        <button type="button" role="radio" class="choice" data-mode="audio"><span class="strong">Solo audio MP3</span><span class="muted small">Extrae la pista de audio y la convierte</span></button>
+      </div>
+
+      <div role="radiogroup" aria-label="Calidad" class="formats" id="add-formats" hidden></div>
+
+      <label class="inline" id="add-mp3" hidden><span>Calidad del MP3</span>
+        <select id="add-kbps">
+          <option value="128">128 kbps</option><option value="192">192 kbps</option>
+          <option value="256">256 kbps</option><option value="320">320 kbps</option><option value="0">Máxima (VBR)</option>
+        </select></label>
+
+      <label class="field"><span>Guardar en</span>
+        <span class="with-btn"><input type="text" id="add-dir"><button type="button" class="btn" id="add-pick">Cambiar…</button></span></label>
+      <label class="field"><span>Nombre del fichero <span class="muted">(opcional)</span></span>
+        <input type="text" id="add-name" placeholder="El que indique el servidor"></label>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" data-close>Cancelar</button>
+      <button type="button" class="btn" id="add-later">Añadir en pausa</button>
+      <button type="submit" class="btn primary" id="add-go">Descargar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Remove -->
+<dialog id="dlg-remove" class="dlg small-dlg" aria-labelledby="rm-title">
+  <form method="dialog">
+    <div class="dlg-head"><h1 id="rm-title">Eliminar descarga</h1></div>
+    <div class="dlg-body">
+      <p id="rm-text"></p>
+      <label class="check"><input type="checkbox" id="rm-file"> Borrar también el fichero del disco</label>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" data-close>Cancelar</button>
+      <button type="submit" class="btn danger" id="rm-go">Eliminar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Settings -->
+<dialog id="dlg-settings" class="dlg wide" aria-labelledby="st-title">
+  <form method="dialog" id="st-form">
+    <div class="dlg-head"><h1 id="st-title">Preferencias</h1><button type="button" class="icon-btn" data-close aria-label="Cerrar">✕</button></div>
+    <div class="dlg-split">
+      <nav class="tabs" aria-label="Secciones">
+        <button type="button" data-tab="general" aria-current="true">General</button>
+        <button type="button" data-tab="conn">Conexiones</button>
+        <button type="button" data-tab="media">Vídeo y audio</button>
+        <button type="button" data-tab="browsers">Navegadores</button>
+      </nav>
+      <div class="tab-body">
+        <section data-panel="general">
+          <h2>Aplicación</h2>
+          <div class="toggle-row">
+            <span><span>Iniciar con el sistema</span><span class="muted small">Arranca minimizado en la bandeja para atender al navegador</span></span>
+            <button type="button" role="switch" class="switch" id="st-autostart" aria-checked="false" aria-label="Iniciar con el sistema"><span></span></button>
+          </div>
+          <div class="toggle-row">
+            <span><span>Carpeta de descargas</span><span class="muted small" id="st-dir"></span></span>
+          </div>
+          <p class="muted small" id="st-engine"></p>
+        </section>
+        <section data-panel="conn" hidden>
+          <h2>Conexiones y velocidad</h2>
+          <label class="num-row"><span><span>Descargas simultáneas</span><span class="muted small">El resto espera en la cola</span></span>
+            <input type="number" id="st-max" min="1" max="20" step="1"></label>
+          <label class="num-row"><span><span>Límite de velocidad (KiB/s)</span><span class="muted small">0 = sin límite. Se reparte entre todas las descargas</span></span>
+            <input type="number" id="st-limit" min="0" step="64"></label>
+        </section>
+        <section data-panel="media" hidden>
+          <h2>Vídeo y audio</h2>
+          <label class="num-row"><span>Calidad MP3 por defecto</span>
+            <select id="st-kbps">
+              <option value="128">128 kbps</option><option value="192">192 kbps</option>
+              <option value="256">256 kbps</option><option value="320">320 kbps</option><option value="0">Máxima (VBR)</option>
+            </select></label>
+          <p class="muted small">Las listas HLS se descargan con el motor propio de raudo; yt-dlp y ffmpeg solo se usan cuando la web lo necesita (YouTube, MP3, unir audio y vídeo).</p>
+        </section>
+        <section data-panel="browsers" hidden>
+          <h2>Integración con navegadores</h2>
+          <p>Firefox, Brave, Chrome y Edge envían las descargas a raudo mediante su extensión. Si un navegador no conecta, registra el puente de nuevo desde una terminal:</p>
+          <pre class="code">raudo-nmhost register</pre>
+        </section>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" data-close>Cancelar</button>
+      <button type="submit" class="btn primary">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

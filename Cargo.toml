@@ -8,6 +8,7 @@ members = [
     "crates/raudo-daemon",
     "crates/raudo-cli",
     "crates/raudo-nmhost",
+    "crates/raudo-app",
 ]
 
 [workspace.package]

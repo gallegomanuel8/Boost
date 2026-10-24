@@ -11,3 +11,4 @@
 /extension-key.pem
 /web-ext-artifacts/
 /extension/.amo-upload-uuid
+/crates/raudo-app/gen/

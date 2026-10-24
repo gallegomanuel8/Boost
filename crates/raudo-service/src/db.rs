@@ -55,6 +55,8 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE downloads ADD COLUMN title TEXT;",
     // 3: audio-only (MP3) downloads
     "ALTER TABLE downloads ADD COLUMN audio_kbps INTEGER;",
+    // 4: user settings that outlive a restart (speed limit, ...)
+    "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
 ];
 
 impl Db {
@@ -201,6 +203,22 @@ impl Db {
 
     pub fn queue_of(&self, id: i64) -> rusqlite::Result<i64> {
         self.conn.query_row("SELECT queue_id FROM downloads WHERE id = ?1", [id], |r| r.get(0))
+    }
+
+    pub fn setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn max_concurrent(&self, queue: i64) -> rusqlite::Result<u32> {
+        self.conn.query_row("SELECT max_concurrent FROM queues WHERE id = ?1", [queue], |r| r.get(0))
     }
 
     pub fn set_max_concurrent(&self, queue: i64, n: u32) -> rusqlite::Result<()> {

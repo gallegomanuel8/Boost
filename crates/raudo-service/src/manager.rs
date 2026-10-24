@@ -96,6 +96,31 @@ impl Manager {
         Ok(id)
     }
 
+    /// One download in depth: its info, final path and, for the HTTP engine, the
+    /// byte ranges of each connection (`[start, end, done]`), for the progress window.
+    pub fn details(&self, id: i64) -> Result<serde_json::Value> {
+        let db = self.db.lock().unwrap();
+        let info = db.info(id).map_err(db_err)?.ok_or(format!("no download {id}"))?;
+        let stored = db.stored(id).map_err(db_err)?;
+        drop(db);
+        let segments: Vec<[u64; 3]> = stored
+            .and_then(|s| s.state)
+            .map(|st| st.segments.iter().map(|s| [s.start, s.end, s.done]).collect())
+            .unwrap_or_default();
+        let path = info.filename.as_ref().map(|f| PathBuf::from(&info.dir).join(f));
+        let (speed, connections) = self
+            .running
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|r| (r.speed, r.connections))
+            .unwrap_or((0.0, 0));
+        let mut info = info;
+        info.speed = speed;
+        info.connections = connections;
+        Ok(serde_json::json!({ "info": info, "path": path, "segments": segments }))
+    }
+
     pub fn list(&self) -> Result<Vec<DownloadInfo>> {
         let mut list = self.db.lock().unwrap().list().map_err(db_err)?;
         let running = self.running.lock().unwrap();
@@ -230,6 +255,25 @@ impl Manager {
 
     pub fn set_speed_limit(&self, kib: u64) {
         self.limiter.set_rate((kib > 0).then_some(kib * 1024));
+        if let Err(e) = self.db.lock().unwrap().set_setting("speed_limit_kib", &kib.to_string()) {
+            warn!("save speed limit: {e}");
+        }
+    }
+
+    /// Settings shown in the preferences window.
+    pub fn settings(&self) -> Result<serde_json::Value> {
+        let db = self.db.lock().unwrap();
+        let kib: u64 = db.setting("speed_limit_kib").map_err(db_err)?.and_then(|v| v.parse().ok()).unwrap_or(0);
+        let max = db.max_concurrent(1).map_err(db_err)?;
+        Ok(serde_json::json!({ "speed_limit_kib": kib, "max_concurrent": max, "download_dir": self.default_dir }))
+    }
+
+    /// Applies saved settings at start-up.
+    pub fn load_settings(&self) {
+        let kib = self.db.lock().unwrap().setting("speed_limit_kib").ok().flatten().and_then(|v| v.parse::<u64>().ok());
+        if let Some(kib) = kib.filter(|k| *k > 0) {
+            self.limiter.set_rate(Some(kib * 1024));
+        }
     }
 
     pub fn set_max_concurrent(self: &Arc<Self>, n: u32) -> Result<()> {

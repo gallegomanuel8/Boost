@@ -68,6 +68,7 @@ impl Service {
         }
         let temp_root = dirs::cache_dir().unwrap_or_else(|| data.clone()).join("raudo").join("parts");
         let manager = Manager::new(db, download_dir(), temp_root);
+        manager.load_settings();
 
         let handler: Arc<dyn Handler> = Arc::new(IpcHandler(manager.clone()));
         tokio::spawn(async move {
@@ -109,6 +110,8 @@ impl Handler for IpcHandler {
                 Call::SetMaxConcurrent { n } => m.set_max_concurrent(n).map(|_| Value::Null),
                 Call::Formats(request) => m.formats(&request).await.map(to_value),
                 Call::Inspect { target, request } => m.inspect(&target, request).await,
+                Call::Details { id } => m.details(id),
+                Call::Settings => m.settings(),
                 Call::Ping => Ok(json!("pong")),
                 Call::Subscribe => Err("subscribe is handled by the connection".into()),
             }

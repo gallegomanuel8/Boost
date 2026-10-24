@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the raudo window may do. Files, folders and notifications go through raudo's own commands, not the generic plugin APIs.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
