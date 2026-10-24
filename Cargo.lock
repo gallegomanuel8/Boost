@@ -1094,6 +1094,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "raudo-nmhost"
+version = "0.1.0"
+dependencies = [
+ "raudo-proto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "raudo-proto"
 version = "0.1.0"
 dependencies = [

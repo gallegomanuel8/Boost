@@ -1,0 +1,268 @@
+// raudo browser integration: forwards downloads and detected media to raudo-nmhost.
+// Capture rules come from the host on connect, so all browsers behave alike.
+
+const api = globalThis.browser ?? globalThis.chrome;
+const IS_FIREFOX = typeof globalThis.browser?.runtime?.getBrowserInfo === "function";
+const HOST = "org.raudo.nmhost";
+const CALL_TIMEOUT_MS = 90_000; // `formats` runs yt-dlp, which can take a while
+
+let port = null;
+let nextId = 1;
+const pending = new Map();
+let config = null;
+let daemonUp = false;
+let hostError = null;
+/** URLs we re-handed to the browser after a failed send: never capture them again. */
+const passThrough = new Set();
+
+// ---------------------------------------------------------------- native host
+
+function connect() {
+  port = api.runtime.connectNative(HOST);
+  port.onMessage.addListener((m) => {
+    const p = pending.get(m.id);
+    if (!p) return;
+    pending.delete(m.id);
+    clearTimeout(p.timer);
+    m.ok ? p.resolve(m) : p.reject(new Error(m.error || "error desconocido"));
+  });
+  port.onDisconnect.addListener((p) => {
+    hostError = api.runtime.lastError?.message || p?.error?.message || "conexión con raudo-nmhost cerrada";
+    port = null;
+    daemonUp = false;
+    for (const req of pending.values()) {
+      clearTimeout(req.timer);
+      req.reject(new Error(hostError));
+    }
+    pending.clear();
+  });
+}
+
+function call(msg) {
+  if (!port) connect();
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error("raudo-nmhost no responde"));
+    }, CALL_TIMEOUT_MS);
+    pending.set(id, { resolve, reject, timer });
+    port.postMessage({ ...msg, id });
+  });
+}
+
+async function hello() {
+  try {
+    const r = await call({ type: "hello", browser: navigator.userAgent });
+    config = r.config;
+    daemonUp = r.daemon;
+    hostError = r.daemon ? null : "raudo-daemon no está en ejecución";
+  } catch (e) {
+    hostError = e.message;
+  }
+  return { daemonUp, hostError };
+}
+
+async function cookieHeader(url) {
+  try {
+    const query = IS_FIREFOX ? { url, firstPartyDomain: null } : { url };
+    const list = await api.cookies.getAll(query);
+    return list.length ? list.map((c) => `${c.name}=${c.value}`).join("; ") : null;
+  } catch {
+    return null;
+  }
+}
+
+async function sendDownload({ url, referer = null, filename = null, video = false, format = null }) {
+  const cookies = await cookieHeader(url);
+  const r = await call({
+    type: "download", url, referer, cookies, userAgent: navigator.userAgent, filename, video, format,
+  });
+  flashBadge();
+  return r.downloadId;
+}
+
+// ---------------------------------------------------------- download capture
+
+function extOf(name) {
+  const m = /\.([a-z0-9]{1,9})$/i.exec(name || "");
+  return m ? m[1].toLowerCase() : "";
+}
+
+function shouldCapture(item) {
+  const c = config?.capture;
+  if (!c?.enabled || !daemonUp) return false;
+  const url = item.finalUrl || item.url;
+  if (!/^https?:/i.test(url) || passThrough.has(url)) return false;
+  let path = "";
+  try { path = new URL(url).pathname; } catch { /* keep empty */ }
+  const ext = extOf(item.filename) || extOf(path);
+  if (!c.exts.includes(ext)) return false;
+  const size = item.totalBytes ?? item.fileSize ?? -1;
+  return size < 0 || size >= c.minSize;
+}
+
+api.downloads.onCreated.addListener(async (item) => {
+  if (!config) await hello();
+  if (!shouldCapture(item)) return;
+  const url = item.finalUrl || item.url;
+  try {
+    await api.downloads.cancel(item.id);
+    await api.downloads.erase({ id: item.id });
+  } catch {
+    return; // already finished or not cancellable: leave it to the browser
+  }
+  try {
+    await sendDownload({ url, referer: item.referrer || null });
+  } catch (e) {
+    // Never lose a download: give it back to the browser.
+    console.warn("raudo: send failed, falling back to the browser:", e.message);
+    passThrough.add(url);
+    api.downloads.download({ url });
+  }
+});
+
+// ------------------------------------------------------------ media detection
+
+/** tabId -> array of {url, kind, mime, size} */
+const media = new Map();
+const mediaKey = (tabId) => `media:${tabId}`;
+
+function header(headers, name) {
+  return headers?.find((h) => h.name.toLowerCase() === name)?.value ?? null;
+}
+
+function classify(d) {
+  const mime = (header(d.responseHeaders, "content-type") || "").split(";")[0].trim().toLowerCase();
+  let path = "";
+  try { path = new URL(d.url).pathname.toLowerCase(); } catch { return null; }
+  if (path.endsWith(".m3u8") || mime.includes("mpegurl")) return { kind: "hls", mime, size: null };
+  if (path.endsWith(".mpd") || mime === "application/dash+xml") return { kind: "dash", mime, size: null };
+  if (!(mime.startsWith("video/") || mime.startsWith("audio/")) || mime.endsWith("/mp2t")) return null;
+
+  // Only whole files: 200, or 206 starting at byte 0 (how <video> opens a file).
+  let size = Number(header(d.responseHeaders, "content-length")) || null;
+  if (d.statusCode === 206) {
+    const m = /^bytes 0-\d+\/(\d+)/.exec(header(d.responseHeaders, "content-range") || "");
+    if (!m) return null;
+    size = Number(m[1]);
+  } else if (d.statusCode !== 200) {
+    return null;
+  }
+  if (size !== null && size < (config?.mediaMinSize ?? 512 * 1024)) return null;
+  return { kind: "file", mime, size };
+}
+
+api.webRequest.onHeadersReceived.addListener(
+  (d) => {
+    if (d.tabId < 0) return;
+    const found = classify(d);
+    if (!found) return;
+    const list = media.get(d.tabId) ?? [];
+    const bare = d.url.split("#")[0];
+    if (list.some((m) => m.url === bare)) return;
+    list.push({ url: bare, ...found });
+    media.set(d.tabId, list);
+    api.storage.session?.set({ [mediaKey(d.tabId)]: list });
+    updateBadge(d.tabId);
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"],
+);
+
+async function mediaFor(tabId) {
+  if (!media.has(tabId) && api.storage.session) {
+    // The service worker may have been restarted since the requests were seen.
+    const stored = await api.storage.session.get(mediaKey(tabId));
+    if (stored[mediaKey(tabId)]) media.set(tabId, stored[mediaKey(tabId)]);
+  }
+  return media.get(tabId) ?? [];
+}
+
+function forgetTab(tabId) {
+  media.delete(tabId);
+  api.storage.session?.remove(mediaKey(tabId));
+  updateBadge(tabId);
+}
+
+api.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === "loading" && info.url) forgetTab(tabId);
+});
+api.tabs.onRemoved.addListener((tabId) => forgetTab(tabId));
+
+function updateBadge(tabId) {
+  const n = media.get(tabId)?.length ?? 0;
+  api.action.setBadgeBackgroundColor({ color: "#2f6fde", tabId }).catch(() => {});
+  api.action.setBadgeText({ text: n ? String(n) : "", tabId }).catch(() => {});
+}
+
+function flashBadge() {
+  api.action.setBadgeText({ text: "✓" }).catch(() => {});
+  setTimeout(() => api.action.setBadgeText({ text: "" }).catch(() => {}), 1500);
+}
+
+// --------------------------------------------------------------- context menu
+
+api.runtime.onInstalled.addListener(async () => {
+  await api.contextMenus.removeAll();
+  api.contextMenus.create({ id: "raudo-link", title: "Descargar enlace con raudo", contexts: ["link"] });
+  api.contextMenus.create({ id: "raudo-media", title: "Descargar este medio con raudo", contexts: ["video", "audio"] });
+  api.contextMenus.create({ id: "raudo-page", title: "Descargar vídeo de esta página con raudo", contexts: ["page"] });
+});
+
+api.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (!config) await hello();
+  try {
+    if (info.menuItemId === "raudo-link") {
+      await sendDownload({ url: info.linkUrl, referer: info.pageUrl });
+    } else if (info.menuItemId === "raudo-media" && /^https?:/i.test(info.srcUrl || "")) {
+      await sendDownload({ url: info.srcUrl, referer: info.pageUrl, video: /\.(m3u8|mpd)(\?|$)/i.test(info.srcUrl) });
+    } else {
+      // blob:/MediaSource players or the page itself: let yt-dlp resolve the page.
+      await sendDownload({ url: info.pageUrl || tab?.url, video: true });
+    }
+  } catch (e) {
+    console.warn("raudo:", e.message);
+  }
+});
+
+// -------------------------------------------------------------- popup bridge
+
+function isVideoSite(url) {
+  try {
+    const host = new URL(url).hostname;
+    return (config?.videoSites ?? []).some((s) => host === s || host.endsWith(`.${s}`));
+  } catch {
+    return false;
+  }
+}
+
+api.runtime.onMessage.addListener((msg, _sender, reply) => {
+  (async () => {
+    if (msg.type === "state") {
+      const { daemonUp, hostError } = await hello();
+      const tab = msg.tabId != null ? await api.tabs.get(msg.tabId).catch(() => null) : null;
+      const needsPermission = IS_FIREFOX && !(await api.permissions.contains({ origins: ["<all_urls>"] }));
+      return {
+        daemonUp, hostError, needsPermission,
+        media: msg.tabId != null ? await mediaFor(msg.tabId) : [],
+        pageUrl: tab?.url ?? null,
+        videoSite: tab?.url ? isVideoSite(tab.url) : false,
+      };
+    }
+    if (msg.type === "download") {
+      return { downloadId: await sendDownload(msg.download) };
+    }
+    if (msg.type === "formats") {
+      const cookies = await cookieHeader(msg.url);
+      return (await call({ type: "formats", url: msg.url, cookies, userAgent: navigator.userAgent })).media;
+    }
+    throw new Error(`mensaje desconocido: ${msg.type}`);
+  })().then(
+    (r) => reply({ ok: true, result: r }),
+    (e) => reply({ ok: false, error: e.message }),
+  );
+  return true; // async reply
+});
+
+hello();

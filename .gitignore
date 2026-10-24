@@ -8,3 +8,4 @@
 # Test downloads
 *.raudo
 *.raudo.json
+/extension-key.pem
