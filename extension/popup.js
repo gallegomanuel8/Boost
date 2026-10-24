@@ -45,19 +45,25 @@ async function download(d, button) {
   }
 }
 
+const KIND_LABEL = { hls: "HLS · vídeo completo", dash: "DASH · vídeo completo" };
+
 function renderMedia(list) {
   const ul = $("media");
   ul.replaceChildren();
   $("media-empty").hidden = list.length > 0;
+  $("media-empty").textContent = state?.videoSite
+    ? "En esta web el vídeo llega en fragmentos: usa «Descargar» de arriba."
+    : "Nada detectado todavía. Si no aparece, dale a reproducir y vuelve a abrir.";
   for (const m of list) {
     const li = document.createElement("li");
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = shortName(m.url);
+    // A playlist file name (index.m3u8, master.m3u8) says nothing; the page title does.
+    name.textContent = m.kind !== "file" && state?.pageTitle ? state.pageTitle : shortName(m.url);
     name.title = m.url;
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = m.kind === "file" ? human(m.size) || m.mime : m.kind.toUpperCase();
+    meta.textContent = KIND_LABEL[m.kind] ?? (human(m.size) || m.mime || "vídeo");
     const btn = document.createElement("button");
     btn.textContent = "Descargar";
     btn.onclick = () => download({ url: m.url, referer: tab?.url, video: m.kind !== "file" }, btn);

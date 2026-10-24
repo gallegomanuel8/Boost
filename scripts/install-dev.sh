@@ -22,13 +22,17 @@ CHROMIUM_DIRS=(
     "$HOME/.config/microsoft-edge"
     "$HOME/.config/vivaldi"
 )
-# Classic layout and the XDG layout used by recent Firefox releases.
-FIREFOX_DIRS=("$HOME/.mozilla" "${XDG_CONFIG_HOME:-$HOME/.config}/mozilla")
+# Firefox reads user native manifests from ~/.mozilla even when its profile uses the
+# XDG layout (~/.config/mozilla/firefox); verified on Firefox 158. A ~/.mozilla
+# without a firefox/ subdirectory does not move the profile back to the legacy layout.
+FIREFOX_NM_DIR="$HOME/.mozilla/native-messaging-hosts"
+# Stale location written by earlier versions of this script.
+OLD_FIREFOX_NM_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/native-messaging-hosts"
 
 uninstall() {
     rm -f "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$DBUS_DIR/org.raudo.Manager.service"
     for d in "${CHROMIUM_DIRS[@]}"; do rm -f "$d/NativeMessagingHosts/$HOST_NAME.json"; done
-    for d in "${FIREFOX_DIRS[@]}"; do rm -f "$d/native-messaging-hosts/$HOST_NAME.json"; done
+    rm -f "$FIREFOX_NM_DIR/$HOST_NAME.json" "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
     echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
 }
 
@@ -71,10 +75,11 @@ for d in "${CHROMIUM_DIRS[@]}"; do
 EOF
     echo "    $d"
 done
-for d in "${FIREFOX_DIRS[@]}"; do
-    [[ -d "$d" ]] || continue
-    mkdir -p "$d/native-messaging-hosts"
-    cat > "$d/native-messaging-hosts/$HOST_NAME.json" <<EOF
+rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
+rmdir "$OLD_FIREFOX_NM_DIR" 2>/dev/null || true
+if command -v firefox >/dev/null || [[ -d "$HOME/.mozilla" || -d "${XDG_CONFIG_HOME:-$HOME/.config}/mozilla" ]]; then
+    mkdir -p "$FIREFOX_NM_DIR"
+    cat > "$FIREFOX_NM_DIR/$HOST_NAME.json" <<EOF
 {
   "name": "$HOST_NAME",
   "description": "raudo download manager",
@@ -83,8 +88,8 @@ for d in "${FIREFOX_DIRS[@]}"; do
   "allowed_extensions": ["$FIREFOX_ID"]
 }
 EOF
-    echo "    $d"
-done
+    echo "    $FIREFOX_NM_DIR"
+fi
 
 cat <<EOF
 

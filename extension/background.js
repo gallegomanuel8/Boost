@@ -170,6 +170,35 @@ api.webRequest.onHeadersReceived.addListener(
   ["responseHeaders"],
 );
 
+/** Media referenced by <video>/<audio> elements, so it shows up before playback starts. */
+async function scanPage(tabId) {
+  if (!api.scripting) return [];
+  try {
+    const results = await api.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        const urls = new Set();
+        for (const el of document.querySelectorAll("video, audio, video source, audio source")) {
+          for (const u of [el.currentSrc, el.getAttribute("src")]) {
+            if (!u) continue;
+            const abs = new URL(u, location.href).href;
+            if (/^https?:/i.test(abs)) urls.add(abs); // blob: = MediaSource player, not a file
+          }
+        }
+        return [...urls];
+      },
+    });
+    return results.flatMap((r) => r.result || []);
+  } catch {
+    return []; // restricted page (about:, store) or frame we cannot reach
+  }
+}
+
+function kindOfUrl(url) {
+  const path = url.split(/[?#]/)[0].toLowerCase();
+  return path.endsWith(".m3u8") ? "hls" : path.endsWith(".mpd") ? "dash" : "file";
+}
+
 async function mediaFor(tabId) {
   if (!media.has(tabId) && api.storage.session) {
     // The service worker may have been restarted since the requests were seen.
@@ -243,10 +272,17 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
       const { daemonUp, hostError } = await hello();
       const tab = msg.tabId != null ? await api.tabs.get(msg.tabId).catch(() => null) : null;
       const needsPermission = IS_FIREFOX && !(await api.permissions.contains({ origins: ["<all_urls>"] }));
+      const list = msg.tabId != null ? [...(await mediaFor(msg.tabId))] : [];
+      if (msg.tabId != null) {
+        for (const url of await scanPage(msg.tabId)) {
+          if (!list.some((m) => m.url === url)) list.push({ url, kind: kindOfUrl(url), mime: "", size: null, fromPage: true });
+        }
+      }
       return {
         daemonUp, hostError, needsPermission,
-        media: msg.tabId != null ? await mediaFor(msg.tabId) : [],
+        media: list,
         pageUrl: tab?.url ?? null,
+        pageTitle: tab?.title ?? null,
         videoSite: tab?.url ? isVideoSite(tab.url) : false,
       };
     }
