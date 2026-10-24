@@ -146,10 +146,24 @@ function header(headers, name) {
   return headers?.find((h) => h.name.toLowerCase() === name)?.value ?? null;
 }
 
+/**
+ * Pieces of a stream rather than whole videos: DASH/HLS fragments (.m4s, .ts,
+ * seg-12, frag5, init.mp4) and byte-range requests in the URL. Many players serve
+ * fMP4 fragments as video/mp4, which would otherwise list each one as a video.
+ */
+function isFragment(url, path) {
+  if (/\.(m4s|ts|aac|cmfv|cmfa)$/.test(path)) return true;
+  // Not "part": real titles use it ("movie-part-2.mp4").
+  if (/(^|[\/_.-])(seg|segment|frag|fragment|chunk)[-_]?\d+/.test(path)) return true;
+  if (/(^|\/)init[^\/]*\.(mp4|m4s)$/.test(path)) return true;
+  return /[?&](range|bytes|byterange)=\d/i.test(url);
+}
+
 function classify(d) {
   const mime = (header(d.responseHeaders, "content-type") || "").split(";")[0].trim().toLowerCase();
   let path = "";
   try { path = new URL(d.url).pathname.toLowerCase(); } catch { return null; }
+  if (isFragment(d.url, path)) return null;
   if (path.endsWith(".m3u8") || mime.includes("mpegurl")) return { kind: "hls", mime, size: null };
   if (path.endsWith(".mpd") || mime === "application/dash+xml") return { kind: "dash", mime, size: null };
   if (!(mime.startsWith("video/") || mime.startsWith("audio/")) || mime.endsWith("/mp2t")) return null;
@@ -335,6 +349,13 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     }
     if (msg.type === "list") {
       return (await call({ type: "list" })).downloads;
+    }
+    if (msg.type === "inspect") {
+      const cookies = await cookieHeader(msg.url);
+      return (await call({
+        type: "inspect", target: msg.target, url: msg.url, referer: msg.referer ?? null,
+        cookies, userAgent: navigator.userAgent,
+      })).info;
     }
     if (msg.type === "cancel") {
       return (await call({ type: "cancel", downloadId: msg.downloadId })).cancelled;

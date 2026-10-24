@@ -216,6 +216,47 @@ pub fn pick_variant(variants: &[Variant], max_height: Option<u32>) -> Option<&Va
         .or_else(|| variants.iter().min_by_key(|v| v.bandwidth))
 }
 
+// ----------------------------------------------------------------- inspect
+
+/// What a playlist offers, for listing it the way IDM does ("TS, 1 h, 720p").
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StreamInfo {
+    pub master: bool,
+    /// Absolute URLs of the variant playlists (empty for a media playlist).
+    pub variants: Vec<String>,
+    /// Height of the variant that would be downloaded.
+    pub height: Option<u32>,
+    pub duration: Option<f64>,
+    /// "ts" or "mp4" (fragmented MP4, EXT-X-MAP).
+    pub container: Option<&'static str>,
+    pub encrypted: bool,
+    pub live: bool,
+}
+
+pub async fn inspect(client: &Client, request: &Request) -> Result<StreamInfo, String> {
+    let fetcher = Fetcher { client, headers: http::build_headers(request) };
+    let url = Url::parse(&request.url).map_err(|e| e.to_string())?;
+    let mut info = StreamInfo::default();
+    let media = match parse(&fetcher.text(url.as_str()).await?)? {
+        Playlist::Media(p) => p,
+        Playlist::Master { variants, .. } => {
+            info.master = true;
+            info.variants = variants.iter().filter_map(|v| join(&url, &v.uri).ok()).map(String::from).collect();
+            let best = pick_variant(&variants, None).ok_or("empty master playlist")?;
+            info.height = best.height;
+            match parse(&fetcher.text(join(&url, &best.uri)?.as_str()).await?)? {
+                Playlist::Media(p) => p,
+                Playlist::Master { .. } => return Err("nested master playlists are not supported".into()),
+            }
+        }
+    };
+    info.duration = Some(media.duration());
+    info.container = Some(if media.init.is_some() { "mp4" } else { "ts" });
+    info.encrypted = media.segments.iter().any(|s| s.key != Key::None);
+    info.live = !media.endlist;
+    Ok(info)
+}
+
 // ---------------------------------------------------------------- download
 
 #[derive(Debug, Clone, Default)]

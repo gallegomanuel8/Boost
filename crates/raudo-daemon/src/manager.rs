@@ -54,6 +54,8 @@ pub struct Manager {
     notify: mpsc::UnboundedSender<Notify>,
     /// Pauses caused by shutdown keep the download queued for the next start.
     shutting_down: AtomicBool,
+    /// `inspect` answers by target and URL.
+    inspected: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
 }
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -74,6 +76,7 @@ impl Manager {
             running: Mutex::new(HashMap::new()),
             notify,
             shutting_down: AtomicBool::new(false),
+            inspected: Mutex::new(HashMap::new()),
         })
     }
 
@@ -179,6 +182,45 @@ impl Manager {
 
     pub async fn formats(&self, request: &Request) -> Result<MediaInfo> {
         video::formats(request).await
+    }
+
+    /// `page`: can the page itself be downloaded (yt-dlp extractor or a player we
+    /// can resolve)? `hls`: what a playlist contains (quality, duration, container).
+    /// Answers are cached for a while: the popup asks every time it opens.
+    pub async fn inspect(self: &Arc<Self>, target: &str, request: Request) -> Result<serde_json::Value> {
+        const TTL: Duration = Duration::from_secs(600);
+        let key = format!("{target}|{}", request.url);
+        if let Some((at, v)) = self.inspected.lock().unwrap().get(&key) {
+            if at.elapsed() < TTL {
+                return Ok(v.clone());
+            }
+        }
+        let value = match target {
+            "page" => {
+                let via = match video::ytdlp_supports(&request.url).await {
+                    Some(true) => Some("yt-dlp"),
+                    known => {
+                        let mut r = request.clone();
+                        r.user_agent.get_or_insert_with(|| resolver::BROWSER_UA.to_owned());
+                        if resolver::resolve(&self.client, &r).await.is_some() {
+                            Some("player")
+                        } else if known.is_none() {
+                            // Could not ask yt-dlp: do not block the buttons on a guess.
+                            Some("yt-dlp")
+                        } else {
+                            None
+                        }
+                    }
+                };
+                serde_json::json!({ "supported": via.is_some(), "via": via })
+            }
+            "hls" => serde_json::to_value(hls::inspect(&self.client, &request).await?).expect("serializable"),
+            other => return Err(format!("unknown inspect target {other}")),
+        };
+        let mut cache = self.inspected.lock().unwrap();
+        cache.retain(|_, (at, _)| at.elapsed() < TTL);
+        cache.insert(key, (Instant::now(), value.clone()));
+        Ok(value)
     }
 
     pub fn set_speed_limit(&self, kib: u64) {

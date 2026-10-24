@@ -26,6 +26,8 @@ enum Msg {
     Formats(PageMsg),
     /// Downloads to show in the popup.
     List,
+    /// Page support or HLS stream details, for the popup.
+    Inspect(InspectMsg),
     /// Stop a download and discard its partial files.
     Cancel {
         #[serde(rename = "downloadId")]
@@ -46,6 +48,14 @@ struct PageMsg {
     /// Tab the media was found on, to re-resolve refused stream links.
     #[serde(default)]
     page: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct InspectMsg {
+    /// "page" or "hls"
+    target: String,
+    #[serde(flatten)]
+    page: PageMsg,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +173,19 @@ impl Host {
                 list.sort_by_key(|d| d["status"] == "completed");
                 list.truncate(30);
                 Ok(json!({ "downloads": list }))
+            }
+            Msg::Inspect(i) => {
+                let body = serde_json::to_string(&i.page.request()).expect("serializable");
+                let target = i.target;
+                let info = self
+                    .call(|m| {
+                        let body = body.clone();
+                        let target = target.clone();
+                        async move { m.inspect(&target, &body).await }
+                    })
+                    .await?;
+                let info: Value = serde_json::from_str(&info).map_err(|e| e.to_string())?;
+                Ok(json!({ "info": info }))
             }
             Msg::Cancel { download_id } => {
                 self.call(|m| async move { m.remove(download_id, false).await }).await?;

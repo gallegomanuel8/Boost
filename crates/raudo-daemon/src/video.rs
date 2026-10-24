@@ -292,6 +292,36 @@ pub async fn mux(tracks: &[PathBuf], out_dir: &Path, stem: &str, audio_kbps: Opt
     }
 }
 
+/// Whether yt-dlp has a site-specific extractor for `url` (its generic fallback
+/// does not count). Uses the zipapp's own matcher, so no network request is made.
+/// `None` when that cannot be determined (non-zipapp build, no python).
+pub async fn ytdlp_supports(url: &str) -> Option<bool> {
+    const CHECK: &str = "import sys\n\
+        sys.path.insert(0, sys.argv[1])\n\
+        from yt_dlp.extractor import gen_extractor_classes\n\
+        print(any(ie.suitable(sys.argv[2]) for ie in gen_extractor_classes() if ie.IE_NAME != 'generic'))";
+    let bin = ytdlp_bin();
+    // Only the zipapp build (starts with a #! line) can be imported as a module.
+    let head = tokio::fs::read(&bin).await.ok()?;
+    if !head.starts_with(b"#!") {
+        return None;
+    }
+    let out = Command::new("python3")
+        .args(["-I", "-c", CHECK])
+        .arg(&bin)
+        .arg(url)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .ok()?;
+    match String::from_utf8_lossy(&out.stdout).trim() {
+        "True" => Some(true),
+        "False" => Some(false),
+        _ => None,
+    }
+}
+
 /// HLS playlists are downloaded natively instead of through yt-dlp.
 pub fn is_hls(url: &str) -> bool {
     url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase().ends_with(".m3u8")

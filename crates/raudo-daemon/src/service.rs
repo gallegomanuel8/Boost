@@ -47,6 +47,13 @@ impl Service {
         self.manager.set_max_concurrent(n).map_err(failed)
     }
 
+    async fn inspect(&self, target: &str, request: &str) -> fdo::Result<String> {
+        let request: Request =
+            serde_json::from_str(request).map_err(|e| fdo::Error::InvalidArgs(format!("bad request JSON: {e}")))?;
+        let value = self.manager.inspect(target, request).await.map_err(failed)?;
+        Ok(value.to_string())
+    }
+
     async fn formats(&self, request: &str) -> fdo::Result<String> {
         let request: Request =
             serde_json::from_str(request).map_err(|e| fdo::Error::InvalidArgs(format!("bad request JSON: {e}")))?;

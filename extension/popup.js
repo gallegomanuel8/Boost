@@ -111,13 +111,61 @@ async function refreshDownloads() {
 
 // -------------------------------------------------------------------- media
 
-const KIND_LABEL = { hls: "HLS · vídeo completo", dash: "DASH · vídeo completo" };
+const MIME_TYPE = {
+  "video/mp4": "MP4", "video/webm": "WEBM", "video/x-matroska": "MKV", "video/quicktime": "MOV",
+  "video/x-flv": "FLV", "video/mp2t": "TS", "audio/mpeg": "MP3", "audio/mp4": "M4A", "audio/ogg": "OGG",
+};
+/** HLS/DASH details from the daemon, by playlist URL. */
+const streamInfo = new Map();
+
+const bare = (u) => u.split(/[?#]/)[0];
 
 function isVideo(m) {
   return m.kind !== "file" || (m.mime || "").startsWith("video/") || VIDEO_EXT.test(m.url);
 }
 
-function renderMedia(list) {
+/** File type the way IDM shows it: "MP4", "WEBM", "TS"... */
+function fileType(m) {
+  const ext = /\.([a-z0-9]{2,5})$/i.exec(bare(m.url))?.[1];
+  return (ext && ext.toUpperCase() !== "PHP" ? ext.toUpperCase() : null) ?? MIME_TYPE[m.mime] ?? "VÍDEO";
+}
+
+function duration(secs) {
+  if (!secs) return null;
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = Math.round(secs % 60);
+  return h ? `${h} h ${m} min` : m ? `${m} min ${s} s` : `${s} s`;
+}
+
+function describe(m) {
+  if (m.kind === "file") return [fileType(m), human(m.size)].filter(Boolean).join(" · ");
+  const info = streamInfo.get(m.url);
+  const kind = m.kind.toUpperCase();
+  if (info === undefined) return `${kind} · comprobando…`;
+  if (info === null) return `${kind} · no se pudo leer`;
+  return [
+    (info.container ?? "ts").toUpperCase(),
+    info.height ? `${info.height}p` : null,
+    duration(info.duration),
+    info.encrypted ? "cifrado" : null,
+    `${kind} → MP4`,
+  ].filter(Boolean).join(" · ");
+}
+
+/** Hides variant playlists of a listed master and repeated URLs (same path, new token). */
+function visibleMedia(list) {
+  const variants = new Set();
+  for (const info of streamInfo.values()) for (const v of info?.variants ?? []) variants.add(bare(v));
+  const seen = new Set();
+  return list.filter((m) => {
+    const key = bare(m.url);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return !(m.kind === "hls" && variants.has(key) && !streamInfo.get(m.url)?.master);
+  });
+}
+
+function renderMedia(all) {
+  const list = visibleMedia(all);
   $("media-empty").hidden = list.length > 0;
   $("media-empty").textContent = state?.videoSite
     ? "En esta web el vídeo llega en fragmentos: usa los botones de arriba."
@@ -134,7 +182,9 @@ function renderMedia(list) {
         // Lets the daemon fetch a fresh link if this one is bound to the browser's IP (VPN).
         page: tab?.url ?? null,
       };
-      const get = el("button", { textContent: "Descargar", className: "primary" });
+      const info = streamInfo.get(m.url);
+      const usable = !stream || (info !== null && !info?.live);
+      const get = el("button", { textContent: "Descargar", className: "primary", disabled: !usable });
       get.onclick = () => download({ ...base, video: stream }, get);
       const line = el("div", { className: "line" },
         el("span", {
@@ -143,17 +193,57 @@ function renderMedia(list) {
           textContent: stream && state?.pageTitle ? state.pageTitle : shortName(m.url),
           title: m.url,
         }),
-        el("span", { className: "meta", textContent: KIND_LABEL[m.kind] ?? (human(m.size) || m.mime || "vídeo") }),
         get,
       );
       if (isVideo(m)) {
-        const mp3 = el("button", { textContent: "MP3", title: "Descargar solo el audio en MP3" });
+        const mp3 = el("button", { textContent: "MP3", title: "Descargar solo el audio en MP3", disabled: !usable });
         mp3.onclick = () => download({ ...base, video: true, audioKbps: mp3Kbps() }, mp3);
         line.append(mp3);
       }
-      return el("li", {}, line);
+      const meta = describe(m) + (info?.live ? " · directo (no soportado)" : "");
+      return el("li", {}, line, el("div", { className: "meta", textContent: meta, title: m.url }));
     }),
   );
+}
+
+/** Asks the daemon about each stream once; re-renders as answers arrive. */
+function inspectStreams(list) {
+  for (const m of list) {
+    if (m.kind !== "hls" || streamInfo.has(m.url)) continue;
+    streamInfo.set(m.url, undefined);
+    send({ type: "inspect", target: "hls", url: m.url, referer: "referer" in m ? m.referer : tab?.url })
+      .then((info) => streamInfo.set(m.url, info), () => streamInfo.set(m.url, null))
+      .then(() => renderMedia(state.media || []));
+  }
+}
+
+// ------------------------------------------------------------- page support
+
+const PAGE_BUTTONS = ["page-best", "page-formats", "formats-go", "page-mp3"];
+
+function setPageSupport(supported, via, checking = false) {
+  for (const b of PAGE_BUTTONS) $(b).disabled = !supported;
+  // Choosing among formats needs yt-dlp; resolved players offer one stream.
+  $("page-formats").disabled = via !== "yt-dlp";
+  const hint = checking
+    ? "Comprobando si esta web se puede descargar…"
+    : supported
+      ? via === "player" ? "Reproductor reconocido: se descargará el vídeo que contiene." : "Usa yt-dlp: funciona en YouTube y cientos de webs."
+      : "Esta web no está soportada para descarga directa. Usa «Medios detectados» (dale a reproducir si está vacío).";
+  for (const id of ["page-hint", "audio-hint"]) {
+    $(id).textContent = hint;
+    $(id).hidden = false;
+  }
+}
+
+async function checkPage() {
+  setPageSupport(false, null, true);
+  try {
+    const info = await send({ type: "inspect", target: "page", url: tab.url });
+    setPageSupport(info.supported, info.via);
+  } catch {
+    setPageSupport(false, null);
+  }
 }
 
 // ------------------------------------------------------------- page / yt-dlp
@@ -208,10 +298,14 @@ async function refresh() {
   const web = /^https?:/i.test(tab?.url || "");
   $("page").hidden = !web;
   $("audio").hidden = !web;
-  $("page-hint").hidden = !web || state.videoSite;
-  for (const b of ["page-best", "page-mp3", "page-formats", "formats-go"]) $(b).disabled = !state.daemonUp;
   renderMedia(state.media || []);
-  if (state.daemonUp) refreshDownloads();
+  if (!state.daemonUp) {
+    for (const b of PAGE_BUTTONS) $(b).disabled = true;
+    return;
+  }
+  inspectStreams(state.media || []);
+  if (web) checkPage();
+  refreshDownloads();
 }
 
 $("page-best").onclick = (e) => download({ url: tab.url, video: true }, e.target);

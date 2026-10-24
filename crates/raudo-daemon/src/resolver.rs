@@ -84,8 +84,8 @@ pub fn unpack_all(html: &str) -> Vec<String> {
         .collect()
 }
 
-/// Best stream URL in a document: HLS/DASH manifests before plain files.
-pub fn find_media(text: &str) -> Option<String> {
+/// Stream URLs in a document, best first: HLS/DASH manifests before plain files.
+pub fn find_media_all(text: &str) -> Vec<String> {
     // JSON-escaped URLs (`https:\/\/cdn\/v.mp4`) are common in player configs.
     let text = text.replace("\\/", "/");
     let mut found: Vec<(u8, String)> = MEDIA
@@ -100,7 +100,41 @@ pub fn find_media(text: &str) -> Option<String> {
         })
         .collect();
     found.sort_by_key(|(r, _)| *r);
-    found.into_iter().next().map(|(_, u)| u)
+    let mut seen = std::collections::HashSet::new();
+    found.into_iter().map(|(_, u)| u).filter(|u| seen.insert(u.clone())).collect()
+}
+
+#[cfg(test)]
+pub fn find_media(text: &str) -> Option<String> {
+    find_media_all(text).into_iter().next()
+}
+
+/// The URL really serves a stream: a playlist, or media bytes rather than an HTML page.
+async fn is_stream(client: &reqwest::Client, url: &str, req: &Request, referer: &str) -> bool {
+    let mut r = client.get(url).header(REFERER, referer).header(reqwest::header::RANGE, "bytes=0-2047");
+    if let Some(ua) = &req.user_agent {
+        r = r.header(USER_AGENT, ua);
+    }
+    let Ok(resp) = r.send().await else { return false };
+    if !resp.status().is_success() {
+        return false;
+    }
+    let ctype = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ctype.starts_with("text/html") {
+        return false;
+    }
+    let Ok(head) = resp.bytes().await else { return false };
+    head.starts_with(b"#EXTM3U")
+        || ctype.contains("mpegurl")
+        || ctype.contains("dash+xml")
+        || ctype.starts_with("video/")
+        || ctype.starts_with("audio/")
+        || raudo_core::http::sniff_extension(&head).is_some()
 }
 
 fn page_title(html: &str) -> Option<String> {
@@ -139,11 +173,24 @@ pub async fn resolve(client: &reqwest::Client, req: &Request) -> Option<Resolved
             docs.push((abs.into(), html));
         }
     }
+    let doc_urls: Vec<String> = docs.iter().map(|(u, _)| u.split('#').next().unwrap_or(u).to_owned()).collect();
+    let mut tried = 0;
     for (url, html) in &docs {
+        let referer = origin_referer(url);
         let unpacked = unpack_all(html);
-        let hit = unpacked.iter().find_map(|u| find_media(u)).or_else(|| find_media(html));
-        if let Some(media) = hit {
-            return Some(Resolved { url: media, referer: origin_referer(url), title: title.clone() });
+        let candidates = unpacked.iter().flat_map(|u| find_media_all(u)).chain(find_media_all(html));
+        for media in candidates {
+            // Pages whose own address ends in .mp4 (streamtape.com/v/…/name.mp4) are not streams.
+            if doc_urls.iter().any(|d| d == &media) {
+                continue;
+            }
+            tried += 1;
+            if tried > 6 {
+                return None;
+            }
+            if is_stream(client, &media, req, &referer).await {
+                return Some(Resolved { url: media, referer, title: title.clone() });
+            }
         }
     }
     None

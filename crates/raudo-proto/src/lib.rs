@@ -148,6 +148,9 @@ pub trait Manager {
     fn set_max_concurrent(&self, n: u32) -> zbus::Result<()>;
     /// `request`: JSON `Request` of a video page. Returns JSON `MediaInfo`.
     fn formats(&self, request: &str) -> zbus::Result<String>;
+    /// `target`: "page" → `{supported, via}`; "hls" → stream info (quality,
+    /// duration, container, variant URLs). Returns JSON.
+    fn inspect(&self, target: &str, request: &str) -> zbus::Result<String>;
 
     /// JSON `DownloadInfo`, emitted on every state change and periodically while downloading.
     #[zbus(signal)]
