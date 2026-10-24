@@ -17,6 +17,10 @@ const FILE: &str = "RAUDO-F ";
 pub struct VideoJob<'a> {
     pub request: &'a Request,
     pub dir: &'a Path,
+    /// Fragments and part files; only the finished file reaches `dir`.
+    pub temp_dir: &'a Path,
+    /// File name without extension; `None` = yt-dlp's `title [id]`.
+    pub title: Option<&'a str>,
     pub format: Option<&'a str>,
     /// Bytes per second.
     pub rate_limit: Option<u64>,
@@ -41,14 +45,61 @@ pub fn ytdlp_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("RAUDO_YTDLP") {
         return p.into();
     }
-    let in_path = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .map(|d| d.join("yt-dlp"))
-        .find(|p| p.is_file());
-    in_path
+    find_in_path("yt-dlp")
         .or_else(|| dirs::home_dir().map(|h| h.join(".local/bin/yt-dlp")).filter(|p| p.is_file()))
         .unwrap_or_else(|| "yt-dlp".into())
+}
+
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
+/// YouTube needs a JavaScript runtime to unlock most formats (without one only
+/// 144p survives). yt-dlp enables only deno by default; fall back to node.
+fn js_runtime_args() -> Vec<String> {
+    if find_in_path("deno").is_some() {
+        return Vec::new();
+    }
+    let node = dirs::home_dir()
+        .map(|h| h.join(".local/opt/node/bin/node"))
+        .filter(|p| p.is_file())
+        .or_else(|| find_in_path("node"));
+    match node {
+        Some(p) => vec!["--js-runtimes".into(), format!("node:{}", p.display())],
+        None => Vec::new(),
+    }
+}
+
+/// Sanitized `title`, made unique in `dir`: `Title`, `Title (2)`, ...
+/// Any existing `Title.<ext>` counts, since the extension is decided by yt-dlp.
+pub fn unique_stem(dir: &Path, title: &str) -> String {
+    let clean: String = title
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
+        .collect();
+    let mut stem: String = clean.trim().trim_start_matches('.').chars().take(150).collect();
+    if stem.is_empty() {
+        stem = "video".into();
+    }
+    let taken = |s: &str| {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.flatten().any(|e| {
+                    let n = e.file_name();
+                    let n = n.to_string_lossy();
+                    n.strip_prefix(s).is_some_and(|rest| rest.starts_with('.'))
+                })
+            })
+            .unwrap_or(false)
+    };
+    if !taken(&stem) {
+        return stem;
+    }
+    (2..).map(|n| format!("{stem} ({n})")).find(|s| !taken(s)).expect("unbounded range")
 }
 
 fn context_args(req: &Request) -> Vec<String> {
@@ -82,12 +133,18 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
         "download:RAUDO-P %(progress)j",
         "--print",
         "after_move:RAUDO-F %(filepath)s",
-        "-o",
-        "%(title).180B [%(id)s].%(ext)s",
     ]
     .map(String::from)
     .into();
-    a.extend(["-P".into(), job.dir.to_string_lossy().into_owned()]);
+    let template = match job.title {
+        // `%` would be read as a template field.
+        Some(t) => format!("{}.%(ext)s", t.replace('%', "%%")),
+        None => "%(title).180B [%(id)s].%(ext)s".into(),
+    };
+    a.extend(["-o".into(), template]);
+    a.extend(["-P".into(), format!("home:{}", job.dir.display())]);
+    a.extend(["-P".into(), format!("temp:{}", job.temp_dir.display())]);
+    a.extend(js_runtime_args());
     a.extend(["-f".into(), job.format.unwrap_or("bv*+ba/b").to_owned()]);
     if let Some(r) = job.rate_limit {
         a.extend(["--limit-rate".into(), r.to_string()]);
@@ -203,6 +260,7 @@ fn interrupt(child: &tokio::process::Child) {
 pub async fn formats(req: &Request) -> Result<MediaInfo, String> {
     let out = Command::new(ytdlp_bin())
         .args(["-J", "--no-playlist", "--no-warnings"])
+        .args(js_runtime_args())
         .args(context_args(req))
         .arg("--")
         .arg(&req.url)
@@ -269,16 +327,39 @@ mod tests {
             referer: Some("https://example.org/".into()),
             ..Default::default()
         };
-        let job = VideoJob { request: &req, dir: Path::new("/tmp/x"), format: Some("22"), rate_limit: Some(1000) };
+        let job = VideoJob {
+            request: &req,
+            dir: Path::new("/tmp/x"),
+            temp_dir: Path::new("/tmp/t"),
+            title: Some("100% real"),
+            format: Some("22"),
+            rate_limit: Some(1000),
+        };
         let a = download_args(&job);
         let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
         assert!(has("-f", "22"));
-        assert!(has("-P", "/tmp/x"));
+        assert!(has("-P", "home:/tmp/x"));
+        assert!(has("-P", "temp:/tmp/t"));
+        assert!(has("-o", "100%% real.%(ext)s"));
         assert!(has("--limit-rate", "1000"));
         assert!(has("--add-header", "Cookie:a=1; b=2"));
         assert!(has("--referer", "https://example.org/"));
         // URL after `--`, so a URL starting with '-' can never become an option.
         assert_eq!(&a[a.len() - 2..], ["--", "https://example.org/v"]);
+    }
+
+    #[test]
+    fn stems_are_unique_and_clean() {
+        let dir = std::env::temp_dir().join(format!("raudo-stem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique_stem(&dir, " a/b "), "a_b");
+        std::fs::write(dir.join("a_b.mp4"), b"").unwrap();
+        std::fs::write(dir.join("a_b (2).mkv"), b"").unwrap();
+        assert_eq!(unique_stem(&dir, "a/b"), "a_b (3)");
+        // `a_b extra.mp4` shares the prefix but is a different name.
+        assert_eq!(unique_stem(&dir, "a_b extra"), "a_b extra");
+        assert_eq!(unique_stem(&dir, "..."), "video");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

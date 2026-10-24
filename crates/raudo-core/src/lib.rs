@@ -5,7 +5,7 @@ pub mod http;
 pub mod limiter;
 pub mod model;
 
-pub use engine::{part_path, run, Dest, Error, Job, Outcome, PART_SUFFIX};
+pub use engine::{part_location, part_path, run, Dest, Error, Job, Outcome, PART_SUFFIX};
 pub use limiter::Limiter;
 pub use model::{Event, Options, Request, Segment, State};
 

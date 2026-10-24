@@ -47,6 +47,8 @@ pub struct Manager {
     limiter: Arc<Limiter>,
     opts: Options,
     default_dir: PathBuf,
+    /// Partial files live in `<temp_root>/<id>/`, never in the user's download folder.
+    temp_root: PathBuf,
     running: Mutex<HashMap<i64, Running>>,
     notify: mpsc::UnboundedSender<Notify>,
     /// Pauses caused by shutdown keep the download queued for the next start.
@@ -60,13 +62,14 @@ fn db_err(e: rusqlite::Error) -> String {
 }
 
 impl Manager {
-    pub fn new(db: Db, default_dir: PathBuf, notify: mpsc::UnboundedSender<Notify>) -> Arc<Self> {
+    pub fn new(db: Db, default_dir: PathBuf, temp_root: PathBuf, notify: mpsc::UnboundedSender<Notify>) -> Arc<Self> {
         Arc::new(Self {
             db: Mutex::new(db),
             client: raudo_core::client().expect("TLS backend available"),
             limiter: Arc::new(Limiter::new(None)),
             opts: Options::default(),
             default_dir,
+            temp_root,
             running: Mutex::new(HashMap::new()),
             notify,
             shutting_down: AtomicBool::new(false),
@@ -138,10 +141,15 @@ impl Manager {
         let info = self.db.lock().unwrap().info(id).map_err(db_err)?.ok_or(format!("no download {id}"))?;
         let path = info.filename.as_ref().map(|f| PathBuf::from(&info.dir).join(f));
         if let Some(r) = self.running.lock().unwrap().get(&id) {
+            // The task deletes the temp dir once the engine or yt-dlp has stopped writing.
             r.discard.store(true, Ordering::SeqCst);
             let _ = r.cancel.send(true);
-        } else if let Some(p) = &path {
-            let _ = std::fs::remove_file(raudo_core::part_path(p));
+        } else {
+            self.clean_temp(id);
+            // Partial files of downloads made before the temp dir existed.
+            if let Some(p) = &path {
+                let _ = std::fs::remove_file(raudo_core::part_path(p));
+            }
         }
         if delete_file && info.status == Status::Completed {
             if let Some(p) = &path {
@@ -151,6 +159,19 @@ impl Manager {
         self.db.lock().unwrap().delete(id).map_err(db_err)?;
         let _ = self.notify.send(Notify::Removed(id));
         Ok(())
+    }
+
+    fn temp_dir(&self, id: i64) -> PathBuf {
+        self.temp_root.join(id.to_string())
+    }
+
+    fn clean_temp(&self, id: i64) {
+        let dir = self.temp_dir(id);
+        if dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                warn!(id, "cannot remove {}: {e}", dir.display());
+            }
+        }
     }
 
     pub async fn formats(&self, request: &Request) -> Result<MediaInfo> {
@@ -224,18 +245,14 @@ impl Manager {
                 None => Dest::Dir(dir.clone()),
             },
             resume: stored.state,
+            temp_dir: Some(self.temp_dir(id)),
         };
         let this = self.clone();
         tokio::spawn(async move {
             let (tx, rx) = mpsc::unbounded_channel();
             let events = tokio::spawn(this.clone().consume_events(id, rx));
             let outcome = raudo_core::run(&this.client, job, &this.opts, this.limiter.clone(), tx, cancel_rx).await;
-            let last_state = events.await.ok().flatten();
-            if discard.load(Ordering::SeqCst) {
-                if let Some(name) = last_state.and_then(|s| s.filename) {
-                    let _ = std::fs::remove_file(raudo_core::part_path(&dir.join(name)));
-                }
-            }
+            let _ = events.await;
             let finished = match outcome {
                 Ok(Outcome::Completed { path, .. }) => Finished::Completed(path),
                 Ok(Outcome::Paused(_)) => Finished::Paused,
@@ -251,9 +268,13 @@ impl Manager {
         tokio::spawn(async move {
             let dir = PathBuf::from(&stored.dir);
             let format = stored.video.as_ref().and_then(|v| v.format.clone());
+            let temp = this.temp_dir(id);
+            let title = stored.title.as_deref().map(|t| video::unique_stem(&dir, t));
             let job = VideoJob {
                 request: &stored.request,
                 dir: &dir,
+                temp_dir: &temp,
+                title: title.as_deref(),
                 format: format.as_deref(),
                 rate_limit: this.limiter.rate(),
             };
@@ -318,8 +339,12 @@ impl Manager {
         self.running.lock().unwrap().remove(&id);
         if discard {
             // Row already deleted by `remove`.
+            self.clean_temp(id);
             self.schedule();
             return;
+        }
+        if matches!(finished, Finished::Completed(_) | Finished::Restart) {
+            self.clean_temp(id);
         }
         let db = self.db.lock().unwrap();
         let result = match finished {

@@ -212,6 +212,7 @@ async fn get(args: GetArgs) -> AnyResult {
             None => Dest::Dir(args.dir),
         },
         resume,
+        temp_dir: None,
     };
     let opts = Options { max_connections: args.connections, ..Default::default() };
     let limiter = Arc::new(Limiter::new(args.limit.map(|k| k * 1024)));

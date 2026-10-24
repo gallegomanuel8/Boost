@@ -57,6 +57,9 @@ pub struct Job {
     pub dest: Dest,
     /// Previously saved state to continue from; its partial file must still exist.
     pub resume: Option<State>,
+    /// Where the partial file lives while downloading; `None` = next to the destination.
+    /// The finished file is moved to the destination.
+    pub temp_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -71,6 +74,25 @@ pub fn part_path(final_path: &Path) -> PathBuf {
     let mut s = final_path.as_os_str().to_owned();
     s.push(PART_SUFFIX);
     PathBuf::from(s)
+}
+
+/// Partial file for `final_path`, inside `temp_dir` when one is configured.
+pub fn part_location(final_path: &Path, temp_dir: Option<&Path>) -> PathBuf {
+    match (temp_dir, final_path.file_name()) {
+        (Some(dir), Some(name)) => part_path(&dir.join(name)),
+        _ => part_path(final_path),
+    }
+}
+
+/// Rename, or copy + delete when the temp dir is on another filesystem.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::rename(from, to) {
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            std::fs::copy(from, to)?;
+            std::fs::remove_file(from)
+        }
+        r => r,
+    }
 }
 
 struct Slot {
@@ -100,6 +122,8 @@ enum Exit {
     Paused,
     /// Extra connection got a full (200) answer or a different range.
     RangeUnsupported,
+    /// 429/503: the server limits connections; optional `Retry-After`.
+    Throttled(Option<Duration>),
     RemoteChanged,
     Failed(String),
 }
@@ -119,11 +143,15 @@ pub async fn run(
 
     // Name chosen by an earlier session of this job: its partial file is ours to overwrite.
     let prior_name = job.resume.as_ref().and_then(|s| s.filename.clone());
+    let temp_dir = job.temp_dir.as_deref();
+    if let Some(dir) = temp_dir {
+        std::fs::create_dir_all(dir)?;
+    }
     let (mut state, final_path, first) = match job.resume {
         Some(st)
             if st.resumable
                 && !st.segments.is_empty()
-                && part_path(&resolve_final(&job.dest, st.filename.as_deref())).exists() =>
+                && part_location(&resolve_final(&job.dest, st.filename.as_deref()), temp_dir).exists() =>
         {
             let path = resolve_final(&job.dest, st.filename.as_deref());
             (st, path, None)
@@ -132,14 +160,14 @@ pub async fn run(
             let (st, resp) = probe(client, &job.request.url, &headers).await?;
             let path = match prior_name.map(|n| resolve_final(&job.dest, Some(&n))) {
                 Some(p) if !p.exists() => p,
-                _ => unique_path(resolve_final(&job.dest, st.filename.as_deref())),
+                _ => unique_path(resolve_final(&job.dest, st.filename.as_deref()), temp_dir),
             };
             let mut st = st;
             st.filename = path.file_name().map(|n| n.to_string_lossy().into_owned());
             (st, path, Some(resp))
         }
     };
-    let part = part_path(&final_path);
+    let part = part_location(&final_path, temp_dir);
     let file = open_part(&part, state.size, first.is_some())?;
 
     let resuming = first.is_none();
@@ -172,10 +200,15 @@ pub async fn run(
     let mut last_bytes = state.downloaded();
     let mut last_progress = Instant::now();
     let mut paused = false;
+    // Lowered when the server answers 429/503 to extra connections.
+    let mut conn_limit = opts.max_connections.max(1);
+    let mut hold_until: Option<Instant> = None;
+    let mut throttle_strikes = 0u32;
 
     loop {
-        if !paused {
-            spawn_workers(&ctx, &mut workers, &mut first, resumable, opts);
+        if !paused && hold_until.is_none_or(|t| Instant::now() >= t) {
+            hold_until = None;
+            spawn_workers(&ctx, &mut workers, &mut first, resumable, opts, conn_limit);
         }
 
         tokio::select! {
@@ -189,6 +222,24 @@ pub async fn run(
                         resumable = false;
                         give_back(&ctx, idx);
                         emit(Event::Notice("server ignores Range, using a single connection".into()));
+                    }
+                    Exit::Throttled(retry_after) => {
+                        // The segment stays idle and is picked up again once a slot frees.
+                        let others = workers.len();
+                        if others == 0 {
+                            throttle_strikes += 1;
+                            if throttle_strikes > opts.max_retries {
+                                state.segments = snapshot_segments(&ctx);
+                                emit(Event::Snapshot(state.clone()));
+                                return Err(Error::RetriesExhausted(opts.max_retries, "server keeps answering 429/503".into()));
+                            }
+                        }
+                        let wait = retry_after.unwrap_or(Duration::from_secs(5 * u64::from(throttle_strikes.max(1))));
+                        hold_until = Some(Instant::now() + wait.min(Duration::from_secs(120)));
+                        if others.max(1) < conn_limit {
+                            conn_limit = others.max(1);
+                            emit(Event::Notice(format!("server limits connections, using {conn_limit}")));
+                        }
                     }
                     Exit::RemoteChanged => {
                         stop_all(&mut workers).await;
@@ -251,7 +302,7 @@ pub async fn run(
         ctx.file.set_len(seg.pos())?;
     }
     ctx.file.sync_all()?;
-    std::fs::rename(&part, &final_path)?;
+    move_file(&part, &final_path)?;
     emit(Event::Snapshot(state.clone()));
     Ok(Outcome::Completed { path: final_path, state })
 }
@@ -302,13 +353,14 @@ fn spawn_workers(
     first: &mut Option<Response>,
     resumable: bool,
     opts: &Options,
+    conn_limit: usize,
 ) {
     if let Some(resp) = first.take() {
         ctx.slots.lock().unwrap()[0].active = true;
         let c = ctx.clone();
         workers.spawn(async move { (0, worker(c, 0, Some(resp)).await) });
     }
-    while workers.len() < opts.max_connections.max(1) {
+    while workers.len() < conn_limit {
         let idx = {
             let mut slots = ctx.slots.lock().unwrap();
             // Continue segments left idle (resume, failed or reverted connection) first.
@@ -431,6 +483,15 @@ fn check_response(ctx: &Ctx, r: &Response, pos: u64, end: u64) -> Result<(), Exi
         StatusCode::OK if ctx.resuming && pos > 0 => Err(Exit::RemoteChanged),
         StatusCode::OK if pos == 0 => Ok(()),
         StatusCode::OK => Err(Exit::RangeUnsupported),
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => {
+            let retry_after = r
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(Duration::from_secs);
+            Err(Exit::Throttled(retry_after))
+        }
         s => {
             debug!(pos, end, %s, "unexpected status");
             Err(Exit::Failed(format!("server answered {s}")))
@@ -532,8 +593,8 @@ fn resolve_final(dest: &Dest, filename: Option<&str>) -> PathBuf {
 
 /// `name.ext` -> `name (1).ext` while the final or partial file already exists.
 /// Compound extensions stay together: `a.tar.xz` -> `a (1).tar.xz`.
-fn unique_path(path: PathBuf) -> PathBuf {
-    let taken = |p: &Path| p.exists() || part_path(p).exists();
+fn unique_path(path: PathBuf, temp_dir: Option<&Path>) -> PathBuf {
+    let taken = |p: &Path| p.exists() || part_location(p, temp_dir).exists();
     if !taken(&path) {
         return path;
     }
@@ -600,10 +661,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("a.iso");
         std::fs::write(&p, b"x").unwrap();
-        assert_eq!(unique_path(p.clone()), dir.join("a (1).iso"));
+        assert_eq!(unique_path(p.clone(), None), dir.join("a (1).iso"));
         let t = dir.join("linux.tar.xz");
         std::fs::write(&t, b"x").unwrap();
-        assert_eq!(unique_path(t), dir.join("linux (1).tar.xz"));
+        assert_eq!(unique_path(t, None), dir.join("linux (1).tar.xz"));
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(split_extension("README"), ("README", ""));
         assert_eq!(split_extension(".bashrc"), (".bashrc", ""));

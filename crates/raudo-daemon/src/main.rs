@@ -41,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
-    let manager = Manager::new(db, download_dir(), notify_tx);
+    let temp_root = dirs::cache_dir().unwrap_or_else(|| data.clone()).join("raudo").join("parts");
+    let manager = Manager::new(db, download_dir(), temp_root, notify_tx);
 
     let conn = zbus::connection::Builder::session()?
         .name(BUS_NAME)?

@@ -66,7 +66,10 @@ function renderMedia(list) {
     meta.textContent = KIND_LABEL[m.kind] ?? (human(m.size) || m.mime || "vídeo");
     const btn = document.createElement("button");
     btn.textContent = "Descargar";
-    btn.onclick = () => download({ url: m.url, referer: tab?.url, video: m.kind !== "file" }, btn);
+    const stream = m.kind !== "file";
+    // Stream playlists have no useful name of their own (index.m3u8): name the file after the page.
+    btn.onclick = () =>
+      download({ url: m.url, referer: tab?.url, video: stream, filename: stream ? state?.pageTitle : null }, btn);
     li.append(name, meta, btn);
     ul.append(li);
   }

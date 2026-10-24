@@ -15,6 +15,8 @@ pub struct Stored {
     pub filename: Option<String>,
     pub state: Option<State>,
     pub video: Option<VideoOptions>,
+    /// Name requested by the client (page title for videos).
+    pub title: Option<String>,
 }
 
 const SCHEMA: &str = "
@@ -49,6 +51,8 @@ const MIGRATIONS: &[&str] = &[
     // 1: video downloads through yt-dlp
     "ALTER TABLE downloads ADD COLUMN video INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE downloads ADD COLUMN format TEXT;",
+    // 2: requested name, kept apart from `filename`, which tracks what is on disk
+    "ALTER TABLE downloads ADD COLUMN title TEXT;",
 ];
 
 impl Db {
@@ -73,8 +77,8 @@ impl Db {
         let request = serde_json::to_string(&add.request).expect("serializable");
         let status = if add.paused { Status::Paused } else { Status::Queued };
         self.conn.execute(
-            "INSERT INTO downloads (url, request, dir, filename, fixed_name, status, video, format)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO downloads (url, request, dir, filename, fixed_name, status, video, format, title)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?4)",
             params![
                 add.request.url,
                 request,
@@ -92,7 +96,7 @@ impl Db {
     pub fn stored(&self, id: i64) -> rusqlite::Result<Option<Stored>> {
         self.conn
             .query_row(
-                "SELECT request, dir, filename, fixed_name, state, video, format FROM downloads WHERE id = ?1",
+                "SELECT request, dir, filename, fixed_name, state, video, format, title FROM downloads WHERE id = ?1",
                 [id],
                 |r| {
                     let request: String = r.get(0)?;
@@ -105,6 +109,7 @@ impl Db {
                         filename: if fixed { r.get(2)? } else { None },
                         state: state.and_then(|s| serde_json::from_str(&s).ok()),
                         video: video.then(|| VideoOptions { format: r.get(6).ok().flatten() }),
+                        title: r.get(7)?,
                     })
                 },
             )
