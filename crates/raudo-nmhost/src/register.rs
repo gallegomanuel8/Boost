@@ -17,7 +17,7 @@ pub const FIREFOX_ID: &str = "raudo@raudo.org";
 fn chromium_manifest(host: &Path) -> serde_json::Value {
     json!({
         "name": HOST_NAME,
-        "description": "raudo download manager",
+        "description": "Boost download manager",
         "path": host,
         "type": "stdio",
         "allowed_origins": [format!("chrome-extension://{CHROME_ID}/")],
@@ -27,7 +27,7 @@ fn chromium_manifest(host: &Path) -> serde_json::Value {
 fn firefox_manifest(host: &Path) -> serde_json::Value {
     json!({
         "name": HOST_NAME,
-        "description": "raudo download manager",
+        "description": "Boost download manager",
         "path": host,
         "type": "stdio",
         "allowed_extensions": [FIREFOX_ID],

@@ -1,4 +1,4 @@
-//! raudo desktop app: the download service plus its window and tray icon.
+//! Boost desktop app (raudo engine): the download service plus its window and tray icon.
 //!
 //! The app runs the service itself unless another raudo (e.g. `raudo-daemon`)
 //! already does; either way the window talks to it over the same local IPC as
@@ -206,15 +206,16 @@ fn quit(app: &AppHandle) {
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Abrir raudo", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Abrir Boost", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause_all", "Pausar todas", true, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume_all", "Reanudar todas", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "quit", "Salir (pausa y guarda las descargas)", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &pause, &resume, &sep, &quit_item])?;
     TrayIconBuilder::with_id("raudo")
-        .icon(app.default_window_icon().cloned().expect("bundle icon"))
-        .tooltip("raudo")
+        // Bolt only: the full icon's "Boost" lettering is unreadable at tray size.
+        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        .tooltip("Boost")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -336,5 +337,5 @@ fn main() {
             install_extension
         ])
         .run(tauri::generate_context!())
-        .expect("raudo failed to start");
+        .expect("Boost failed to start");
 }

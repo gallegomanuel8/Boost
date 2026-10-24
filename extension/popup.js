@@ -50,7 +50,7 @@ async function download(d, button) {
   if (button) button.disabled = true;
   try {
     const r = await send({ type: "download", download: d });
-    say(`Añadido a raudo (#${r.downloadId}).`, "ok");
+    say(`Añadido a Boost (#${r.downloadId}).`, "ok");
     refreshDownloads();
   } catch (e) {
     say(e.message, "err");
@@ -332,7 +332,7 @@ async function refresh() {
   } else {
     st.textContent = "sin conexión";
     st.className = "err";
-    say(state.hostError || "raudo no disponible", "err");
+    say(state.hostError || "Boost no disponible", "err");
   }
   $("permission").hidden = !state.needsPermission;
   const web = /^https?:/i.test(tab?.url || "");

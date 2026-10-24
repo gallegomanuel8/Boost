@@ -1,4 +1,4 @@
-// raudo window: talks to the service through the Rust commands in src/main.rs.
+// Boost window: talks to the service through the Rust commands in src/main.rs.
 "use strict";
 
 const { invoke } = window.__TAURI__.core;
@@ -340,7 +340,7 @@ function renderFooter() {
   $("f-speed").textContent = "Velocidad total: " + (total > 0 ? bytes(total) + "/s" : "—");
   $("f-limit").textContent = "Límite: " + (settings.speed_limit_kib > 0 ? bytes(settings.speed_limit_kib * 1024) + "/s" : "sin límite");
   $("f-engine").replaceChildren(el("span", { class: "dot" }),
-    ownsService ? "Motor en esta ventana" : "Motor: raudo-daemon");
+    ownsService ? "Motor en esta ventana" : "Motor: servicio en segundo plano");
 }
 
 function renderToolbar() {
@@ -694,7 +694,7 @@ $("btn-settings").onclick = async () => {
   $("st-dir").textContent = settings.download_dir;
   $("st-engine").textContent = ownsService
     ? "Las descargas se ejecutan dentro de esta aplicación: al cerrar la ventana siguen en la bandeja; «Salir» las pausa."
-    : "Las descargas las ejecuta raudo-daemon en segundo plano; esta ventana es solo un cliente.";
+    : "Las descargas las ejecuta el servicio en segundo plano (raudo-daemon); esta ventana es solo un cliente.";
   const auto = await call("autostart_enabled").catch(() => false);
   $("st-autostart").setAttribute("aria-checked", String(auto));
   $("st-autostart").dataset.was = String(auto);

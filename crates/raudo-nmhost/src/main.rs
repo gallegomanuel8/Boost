@@ -122,15 +122,16 @@ struct Host {
 fn service_executable() -> Option<std::path::PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let exe = |name: &str| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    [exe("raudo"), exe("raudo-daemon")].into_iter().find(|p| p.is_file())
+    // `raudo` is the app's name before it became Boost.
+    [exe("boost"), exe("raudo"), exe("raudo-daemon")].into_iter().find(|p| p.is_file())
 }
 
-/// Starts raudo in the background, detached from the browser's process group.
+/// Starts Boost in the background, detached from the browser's process group.
 fn launch_service() -> bool {
     let Some(exe) = service_executable() else { return false };
     let mut cmd = std::process::Command::new(&exe);
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    if exe.file_stem().is_some_and(|s| s == "raudo") {
+    if exe.file_stem().is_some_and(|s| s == "boost" || s == "raudo") {
         cmd.arg("--background");
     }
     #[cfg(unix)]
@@ -151,7 +152,7 @@ fn launch_service() -> bool {
 
 fn remote(e: ClientError) -> String {
     match e {
-        ClientError::NotRunning => "raudo is not running".into(),
+        ClientError::NotRunning => "Boost is not running".into(),
         other => other.to_string(),
     }
 }

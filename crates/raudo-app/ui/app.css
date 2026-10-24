@@ -50,6 +50,7 @@ button:disabled { cursor: default; opacity: .45; }
   display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px;
   background: var(--panel); border-bottom: 1px solid var(--line);
 }
+.brand img { border-radius: 7px; }
 .brand { display: flex; align-items: center; gap: 8px; margin-right: 8px; font-size: 17px; font-weight: 700; }
 .group { display: flex; gap: 4px; }
 .search {

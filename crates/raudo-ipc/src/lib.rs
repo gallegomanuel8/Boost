@@ -72,7 +72,7 @@ pub enum ClientError {
 impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ClientError::NotRunning => f.write_str("raudo is not running"),
+            ClientError::NotRunning => f.write_str("Boost is not running"),
             ClientError::Denied => f.write_str("raudo refused the connection (access token mismatch)"),
             ClientError::Io(e) => write!(f, "connection to raudo failed: {e}"),
             ClientError::Remote(e) => f.write_str(e),

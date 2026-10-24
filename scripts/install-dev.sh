@@ -14,7 +14,9 @@ AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/raudo-daemon.desktop"
 HOST_NAME="org.raudo.nmhost"
 CHROME_ID="boloeecmdjhgdkcahinhhpakjhiljbhi"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-ICON="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps/raudo.png"
+ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+# The app was called raudo before Boost: its launcher and icon are removed on install.
+OLD_APP=("$BIN/raudo" "$APPS_DIR/org.raudo.app.desktop" "$ICONS/128x128/apps/raudo.png")
 
 # Regular browsers are registered by `raudo-nmhost register`. Firefox reads user
 # manifests from ~/.mozilla even when its profile uses the XDG layout
@@ -51,8 +53,8 @@ uninstall() {
         fi
     done
     [[ -x "$BIN/raudo-nmhost" ]] && "$BIN/raudo-nmhost" unregister >/dev/null
-    rm -f "$BIN/raudo" "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
-    rm -f "$APPS_DIR/org.raudo.app.desktop" "$ICON"
+    rm -f "${OLD_APP[@]}" "$BIN/boost" "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
+    rm -f "$APPS_DIR/org.boost.app.desktop" "$ICONS"/{32x32,128x128,256x256,512x512}/apps/boost.png
     rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
     echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
 }
@@ -67,7 +69,7 @@ echo "==> building release binaries"
 
 echo "==> installing binaries into $BIN"
 mkdir -p "$BIN"
-for b in raudo raudo-daemon raudo-cli raudo-nmhost; do
+for b in boost raudo-daemon raudo-cli raudo-nmhost; do
     install -m 755 "$ROOT/target/release/$b" "$BIN/$b"
 done
 
@@ -77,21 +79,26 @@ if [[ -f "$OLD_DBUS_SERVICE" ]]; then
 fi
 
 echo "==> application menu entry"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128.png" "$ICON"
+rm -f "${OLD_APP[@]}"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/32x32.png" "$ICONS/32x32/apps/boost.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128.png" "$ICONS/128x128/apps/boost.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128@2x.png" "$ICONS/256x256/apps/boost.png"
+install -D -m 644 "$ROOT/crates/raudo-app/icons/icon.png" "$ICONS/512x512/apps/boost.png"
 mkdir -p "$APPS_DIR"
-cat > "$APPS_DIR/org.raudo.app.desktop" <<EOF
+cat > "$APPS_DIR/org.boost.app.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=raudo
+Name=Boost
 GenericName=Gestor de descargas
 Comment=Descarga ficheros y vídeos con varias conexiones
-Exec=$BIN/raudo
-Icon=raudo
+Exec=$BIN/boost
+Icon=boost
 Terminal=false
 Categories=Network;FileTransfer;
-StartupWMClass=raudo
+StartupWMClass=boost
 EOF
 update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+gtk-update-icon-cache -q -t "$ICONS" >/dev/null 2>&1 || true
 
 echo "==> autostart with the session"
 # Sandboxed browsers cannot start the service themselves; this keeps it available.
@@ -99,8 +106,8 @@ mkdir -p "$(dirname "$AUTOSTART")"
 cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
 Type=Application
-Name=raudo
-Comment=raudo download service
+Name=Boost (servicio)
+Comment=Servicio de descargas de Boost
 Exec=$BIN/raudo-daemon
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
@@ -130,7 +137,7 @@ if ((${#flatpak_apps[@]})); then
         cat > "$nm_dir/$HOST_NAME.json" <<EOF
 {
   "name": "$HOST_NAME",
-  "description": "raudo download manager",
+  "description": "Boost download manager",
   "path": "$host_bin",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$CHROME_ID/"]

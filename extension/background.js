@@ -27,7 +27,7 @@ function connect() {
     m.ok ? p.resolve(m) : p.reject(new Error(m.error || "error desconocido"));
   });
   port.onDisconnect.addListener((p) => {
-    hostError = api.runtime.lastError?.message || p?.error?.message || "conexión con raudo-nmhost cerrada";
+    hostError = api.runtime.lastError?.message || p?.error?.message || "conexión con Boost cerrada";
     port = null;
     daemonUp = false;
     for (const req of pending.values()) {
@@ -44,7 +44,7 @@ function call(msg) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error("raudo-nmhost no responde"));
+      reject(new Error("Boost no responde"));
     }, CALL_TIMEOUT_MS);
     pending.set(id, { resolve, reject, timer });
     port.postMessage({ ...msg, id });
@@ -56,7 +56,7 @@ async function hello() {
     const r = await call({ type: "hello", browser: navigator.userAgent });
     config = r.config;
     daemonUp = r.daemon;
-    hostError = r.daemon ? null : "raudo-daemon no está en ejecución";
+    hostError = r.daemon ? null : "Boost no está en ejecución";
   } catch (e) {
     hostError = e.message;
   }
@@ -375,9 +375,9 @@ function flashBadge() {
 
 api.runtime.onInstalled.addListener(async () => {
   await api.contextMenus.removeAll();
-  api.contextMenus.create({ id: "raudo-link", title: "Descargar enlace con raudo", contexts: ["link"] });
-  api.contextMenus.create({ id: "raudo-media", title: "Descargar este medio con raudo", contexts: ["video", "audio"] });
-  api.contextMenus.create({ id: "raudo-page", title: "Descargar vídeo de esta página con raudo", contexts: ["page"] });
+  api.contextMenus.create({ id: "raudo-link", title: "Descargar enlace con Boost", contexts: ["link"] });
+  api.contextMenus.create({ id: "raudo-media", title: "Descargar este medio con Boost", contexts: ["video", "audio"] });
+  api.contextMenus.create({ id: "raudo-page", title: "Descargar vídeo de esta página con Boost", contexts: ["page"] });
 });
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {
