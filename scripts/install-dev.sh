@@ -53,6 +53,8 @@ cat > "$DBUS_DIR/org.raudo.Manager.service" <<EOF
 Name=org.raudo.Manager
 Exec=$BIN/raudo-daemon
 EOF
+# dbus-broker only picks up new .service files after a reload.
+busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 
 echo "==> Native Messaging manifests"
 for d in "${CHROMIUM_DIRS[@]}"; do
