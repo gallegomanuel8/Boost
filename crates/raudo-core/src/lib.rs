@@ -1,6 +1,7 @@
 //! raudo download engine: segmented HTTP downloads with dynamic splitting and resume.
 
 pub mod engine;
+pub mod hls;
 pub mod http;
 pub mod limiter;
 pub mod model;

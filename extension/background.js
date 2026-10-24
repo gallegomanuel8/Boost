@@ -74,12 +74,12 @@ async function cookieHeader(url) {
 }
 
 async function sendDownload({
-  url, referer = null, filename = null, title = null, video = false, format = null, audioKbps = null,
+  url, referer = null, filename = null, title = null, video = false, format = null, audioKbps = null, page = null,
 }) {
   const cookies = await cookieHeader(url);
   const r = await call({
     type: "download", url, referer, cookies, userAgent: navigator.userAgent,
-    filename, title, video, format, audioKbps,
+    filename, title, video, format, audioKbps, page,
   });
   flashBadge();
   return r.downloadId;
@@ -274,6 +274,7 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
         url: info.srcUrl,
         referer: info.frameUrl || info.pageUrl,
         title: tab?.title ?? null,
+        page: info.pageUrl ?? null,
         video: /\.(m3u8|mpd)(\?|$)/i.test(info.srcUrl),
       });
     } else {

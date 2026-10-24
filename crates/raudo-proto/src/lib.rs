@@ -21,6 +21,10 @@ pub struct Request {
     pub referer: Option<String>,
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// Page the media was found on. If the stream link fails (tokens bound to the
+    /// browser's IP, e.g. behind a VPN), the daemon resolves a fresh one from it.
+    #[serde(default)]
+    pub page: Option<String>,
 }
 
 /// Argument of `Add`.

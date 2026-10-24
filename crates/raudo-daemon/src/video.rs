@@ -244,6 +244,59 @@ pub async fn run(
     }
 }
 
+/// Builds the final file from natively downloaded HLS tracks (video or muxed
+/// stream first, optional separate audio second), without re-encoding video.
+/// With `audio_kbps` only the audio is kept, as MP3.
+pub async fn mux(tracks: &[PathBuf], out_dir: &Path, stem: &str, audio_kbps: Option<u32>) -> Result<PathBuf, String> {
+    let first = tracks.first().ok_or("nothing was downloaded")?;
+    tokio::fs::create_dir_all(out_dir).await.map_err(|e| e.to_string())?;
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into(), "-y".into()];
+    for t in tracks {
+        // TS streams may only state the picture size deep into the file ("dimensions not set").
+        args.extend(["-probesize".into(), "100M".into(), "-analyzeduration".into(), "100M".into()]);
+        args.extend(["-i".into(), t.to_string_lossy().into_owned()]);
+    }
+    let audio_map = if tracks.len() > 1 { "1:a" } else { "0:a" };
+    let out = match audio_kbps {
+        Some(kbps) => {
+            let out = out_dir.join(format!("{stem}.mp3"));
+            args.extend(["-map".into(), audio_map.into(), "-vn".into(), "-c:a".into(), "libmp3lame".into()]);
+            if kbps == 0 {
+                args.extend(["-q:a".into(), "0".into()]);
+            } else {
+                args.extend(["-b:a".into(), format!("{kbps}k")]);
+            }
+            out
+        }
+        None => {
+            let out = out_dir.join(format!("{stem}.mp4"));
+            args.extend(["-map".into(), "0:v?".into(), "-map".into(), format!("{audio_map}?")]);
+            args.extend(["-c".into(), "copy".into(), "-movflags".into(), "+faststart".into()]);
+            out
+        }
+    };
+    args.push(out.to_string_lossy().into_owned());
+
+    let result = Command::new("ffmpeg").args(&args).stdin(Stdio::null()).kill_on_drop(true).output().await;
+    match result {
+        Ok(o) if o.status.success() => Ok(out),
+        // Codecs MP4 cannot hold: keep the joined stream as it came.
+        _ if audio_kbps.is_none() && tracks.len() == 1 => {
+            let ext = first.extension().and_then(|e| e.to_str()).unwrap_or("ts");
+            let keep = out_dir.join(format!("{stem}.{ext}"));
+            tokio::fs::rename(first, &keep).await.map_err(|e| e.to_string())?;
+            Ok(keep)
+        }
+        Ok(o) => Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Err(e) => Err(format!("cannot run ffmpeg: {e}")),
+    }
+}
+
+/// HLS playlists are downloaded natively instead of through yt-dlp.
+pub fn is_hls(url: &str) -> bool {
+    url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase().ends_with(".m3u8")
+}
+
 /// SIGINT lets yt-dlp close its part files cleanly (SIGKILL could leave ffmpeg output half-written).
 fn interrupt(child: &tokio::process::Child) {
     if let Some(pid) = child.id() {

@@ -43,6 +43,9 @@ struct PageMsg {
     cookies: Option<String>,
     #[serde(default)]
     user_agent: Option<String>,
+    /// Tab the media was found on, to re-resolve refused stream links.
+    #[serde(default)]
+    page: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +74,7 @@ impl PageMsg {
             referer: self.referer,
             cookies: self.cookies,
             user_agent: self.user_agent,
+            page: self.page,
             ..Default::default()
         }
     }

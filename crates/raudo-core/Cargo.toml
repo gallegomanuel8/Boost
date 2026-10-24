@@ -15,3 +15,6 @@ thiserror.workspace = true
 tracing.workspace = true
 percent-encoding.workspace = true
 url.workspace = true
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+bytes = "1"

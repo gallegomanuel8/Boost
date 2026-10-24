@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use raudo_core::{Dest, Error as EngineError, Event, Job, Limiter, Options, Outcome};
+use raudo_core::{hls, Dest, Error as EngineError, Event, Job, Limiter, Options, Outcome};
 use raudo_proto::{AddDownload, DownloadInfo, MediaInfo, Request, Status, VideoOptions};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
@@ -282,22 +282,42 @@ impl Manager {
             let mut title = stored.title.as_deref().map(video::clean_stem);
             let mut request = stored.request.clone();
 
-            let mut outcome = this.run_video(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel.clone()).await;
-            // Page yt-dlp cannot parse: look for the stream behind it ourselves.
-            if matches!(&outcome, Err(e) if e.contains("Unsupported URL")) {
+            let mut outcome = this
+                .stream_or_ytdlp(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel.clone())
+                .await;
+            // Look for the stream behind the page ourselves when yt-dlp cannot parse
+            // the page, or when the link the browser saw is refused here (tokens bound
+            // to the browser's IP: Firefox's built-in VPN, proxies).
+            let unsupported = matches!(&outcome, Err(e) if e.contains("Unsupported URL"));
+            let refused = matches!(&outcome, Err(e) if e.contains("403")) && request.page.is_some();
+            if unsupported || refused {
+                let mut page = if unsupported {
+                    request.clone()
+                } else {
+                    info!(id, "stream link refused, resolving a fresh one from the page");
+                    Request {
+                        url: request.page.clone().unwrap_or_default(),
+                        referer: None,
+                        headers: Vec::new(),
+                        ..request.clone()
+                    }
+                };
                 // Same user agent for the page fetch and the download: tokens may be bound to it.
-                request.user_agent.get_or_insert_with(|| resolver::BROWSER_UA.to_owned());
-                if let Some(found) = resolver::resolve(&this.client, &request).await {
+                page.user_agent.get_or_insert_with(|| resolver::BROWSER_UA.to_owned());
+                request.user_agent.clone_from(&page.user_agent);
+                if let Some(found) = resolver::resolve(&this.client, &page).await {
                     info!(id, url = %found.url, "resolved embedded player stream");
                     title = title.or(found.title.as_deref().map(video::clean_stem));
                     request = Request {
                         url: found.url,
                         referer: Some(found.referer),
                         cookies: None,
-                        ..request
+                        headers: Vec::new(),
+                        page: None,
+                        ..page
                     };
                     outcome = this
-                        .run_video(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel)
+                        .stream_or_ytdlp(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel)
                         .await;
                 }
             }
@@ -317,9 +337,10 @@ impl Manager {
         });
     }
 
-    /// One yt-dlp run, persisting its progress.
+    /// HLS playlists are fetched natively, segment by segment (as IDM does);
+    /// everything else goes through yt-dlp.
     #[allow(clippy::too_many_arguments)]
-    async fn run_video(
+    async fn stream_or_ytdlp(
         self: &Arc<Self>,
         id: i64,
         request: &Request,
@@ -330,17 +351,53 @@ impl Manager {
         audio_kbps: Option<u32>,
         cancel: watch::Receiver<bool>,
     ) -> std::result::Result<VideoOutcome, String> {
-        let job = VideoJob {
+        let mut on_progress = self.progress_sink(id);
+        if !video::is_hls(&request.url) {
+            let job = VideoJob {
+                request,
+                dir: out,
+                temp_dir: temp,
+                title,
+                format,
+                audio_kbps,
+                rate_limit: self.limiter.rate(),
+            };
+            return video::run(job, on_progress, cancel).await;
+        }
+
+        let job = hls::HlsJob {
             request,
-            dir: out,
-            temp_dir: temp,
-            title,
-            format,
-            audio_kbps,
-            rate_limit: self.limiter.rate(),
+            work_dir: &temp.join("hls"),
+            // The audio is the same in every variant: a small one is enough for MP3.
+            max_height: audio_kbps.map(|_| 480),
+            concurrency: 6,
         };
+        let from_url = raudo_core::http::filename_from_url(&request.url)
+            .filter(|n| !raudo_core::http::looks_random(n))
+            .map(|n| n.trim_end_matches(".m3u8").to_owned());
+        let stem = video::clean_stem(&title.map(str::to_owned).or(from_url).unwrap_or_else(|| "video".into()));
+        // Shown while downloading; the final name may get " (1)" if taken.
+        let shown = format!("{stem}.{}", if audio_kbps.is_some() { "mp3" } else { "mp4" });
+        let progress = |p: hls::HlsProgress| {
+            on_progress(video::Progress {
+                downloaded: p.downloaded,
+                total: p.total,
+                speed: p.speed,
+                file: Some(shown.clone()),
+            })
+        };
+        match hls::run(&self.client, job, progress, cancel).await? {
+            hls::HlsOutcome::Paused => Ok(VideoOutcome::Paused),
+            hls::HlsOutcome::Completed(tracks) => {
+                video::mux(&tracks, out, &stem, audio_kbps).await.map(VideoOutcome::Completed)
+            }
+        }
+    }
+
+    /// Records download progress: speed for `list`, throttled database writes and signals.
+    fn progress_sink(self: &Arc<Self>, id: i64) -> impl FnMut(video::Progress) + '_ {
         let mut last_save = Instant::now() - Duration::from_secs(1);
-        let on_progress = |p: video::Progress| {
+        move |p: video::Progress| {
             if let Some(r) = self.running.lock().unwrap().get_mut(&id) {
                 r.speed = p.speed;
                 r.connections = 1;
@@ -357,8 +414,7 @@ impl Manager {
                 self.changed(id);
                 last_save = Instant::now();
             }
-        };
-        video::run(job, on_progress, cancel).await
+        }
     }
 
     /// Persists engine snapshots and forwards throttled progress.

@@ -131,6 +131,8 @@ function renderMedia(list) {
         referer: "referer" in m ? m.referer : tab?.url,
         // The daemon names streams after it, and files too when their own name is random.
         title: state?.pageTitle ?? null,
+        // Lets the daemon fetch a fresh link if this one is bound to the browser's IP (VPN).
+        page: tab?.url ?? null,
       };
       const get = el("button", { textContent: "Descargar", className: "primary" });
       get.onclick = () => download({ ...base, video: stream }, get);
