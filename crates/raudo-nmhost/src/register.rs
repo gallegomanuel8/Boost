@@ -47,7 +47,21 @@ fn write_json(path: &Path, v: &serde_json::Value) -> std::io::Result<()> {
 }
 
 fn this_exe() -> std::io::Result<PathBuf> {
-    std::env::current_exe()?.canonicalize()
+    let exe = std::env::current_exe()?.canonicalize()?;
+    Ok(without_verbatim_prefix(exe))
+}
+
+/// `canonicalize` on Windows adds the `\\?\` prefix, which the shell refuses in
+/// the `boost:` link's command ("access denied").
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let Some(s) = path.to_str() else { return path };
+    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(plain) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(plain)
+    } else {
+        path
+    }
 }
 
 #[cfg(windows)]
@@ -179,5 +193,13 @@ mod tests {
         assert_eq!(f["allowed_extensions"][0], "boost-downloader@boost.app");
         assert_eq!(f["allowed_extensions"][1], "raudo@raudo.org");
         assert_eq!(f["type"], "stdio");
+    }
+
+    #[test]
+    fn paths_lose_the_verbatim_prefix() {
+        let p = |s: &str| without_verbatim_prefix(PathBuf::from(s));
+        assert_eq!(p(r"\\?\C:\Users\a\Boost\boost.exe"), PathBuf::from(r"C:\Users\a\Boost\boost.exe"));
+        assert_eq!(p(r"\\?\UNC\server\share\boost.exe"), PathBuf::from(r"\\server\share\boost.exe"));
+        assert_eq!(p("/opt/raudo/raudo-nmhost"), PathBuf::from("/opt/raudo/raudo-nmhost"));
     }
 }

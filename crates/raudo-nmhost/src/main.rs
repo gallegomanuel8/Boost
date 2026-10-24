@@ -141,15 +141,42 @@ fn launch_service() -> bool {
         use std::os::unix::process::CommandExt;
         // Own session: closing the browser must not stop the downloads.
         cmd.process_group(0);
+        cmd.spawn().is_ok()
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        // Browsers run this host in a job object and kill the whole job, Boost
+        // included, when the port closes; Boost has to leave it.
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        keep_std_handles_private();
+        let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        if cmd.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB).spawn().is_ok() {
+            return true;
+        }
+        // A job that forbids leaving it: better started inside than not at all.
+        cmd.creation_flags(flags).spawn().is_ok()
     }
-    cmd.spawn().is_ok()
+}
+
+/// Boost must not inherit the browser's pipes (this host's stdio): it would hold
+/// them open after the host exits, and the browser would never see it go.
+#[cfg(windows)]
+fn keep_std_handles_private() {
+    use std::os::windows::io::AsRawHandle;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+    }
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+    for h in [std::io::stdin().as_raw_handle(), std::io::stdout().as_raw_handle(), std::io::stderr().as_raw_handle()] {
+        if !h.is_null() {
+            // SAFETY: a std handle of this process; only its inherit flag changes.
+            unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0) };
+        }
+    }
 }
 
 fn remote(e: ClientError) -> String {
