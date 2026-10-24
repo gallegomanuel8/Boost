@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 use crate::db::{Db, Stored};
+use crate::resolver;
 use crate::video::{self, VideoJob, VideoOutcome};
 
 /// How a download task ended, whatever did the work (engine or yt-dlp).
@@ -278,36 +279,29 @@ impl Manager {
             // yt-dlp overwrites an existing output (MP3 conversion always does), so it
             // finishes inside the temp dir and we pick a free name in `dir` ourselves.
             let out = temp.join("out");
-            let title = stored.title.as_deref().map(video::clean_stem);
-            let job = VideoJob {
-                request: &stored.request,
-                dir: &out,
-                temp_dir: &temp,
-                title: title.as_deref(),
-                format: format.as_deref(),
-                audio_kbps,
-                rate_limit: this.limiter.rate(),
-            };
-            let mut last_save = Instant::now() - Duration::from_secs(1);
-            let on_progress = |p: video::Progress| {
-                if let Some(r) = this.running.lock().unwrap().get_mut(&id) {
-                    r.speed = p.speed;
-                    r.connections = 1;
+            let mut title = stored.title.as_deref().map(video::clean_stem);
+            let mut request = stored.request.clone();
+
+            let mut outcome = this.run_video(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel.clone()).await;
+            // Page yt-dlp cannot parse: look for the stream behind it ourselves.
+            if matches!(&outcome, Err(e) if e.contains("Unsupported URL")) {
+                // Same user agent for the page fetch and the download: tokens may be bound to it.
+                request.user_agent.get_or_insert_with(|| resolver::BROWSER_UA.to_owned());
+                if let Some(found) = resolver::resolve(&this.client, &request).await {
+                    info!(id, url = %found.url, "resolved embedded player stream");
+                    title = title.or(found.title.as_deref().map(video::clean_stem));
+                    request = Request {
+                        url: found.url,
+                        referer: Some(found.referer),
+                        cookies: None,
+                        ..request
+                    };
+                    outcome = this
+                        .run_video(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel)
+                        .await;
                 }
-                if last_save.elapsed() >= Duration::from_millis(500) {
-                    let db = this.db.lock().unwrap();
-                    let saved = db
-                        .save_progress(id, p.downloaded, p.total)
-                        .and_then(|_| p.file.as_deref().map_or(Ok(()), |f| db.set_filename(id, f)));
-                    drop(db);
-                    if let Err(e) = saved {
-                        warn!(id, "save progress: {e}");
-                    }
-                    this.changed(id);
-                    last_save = Instant::now();
-                }
-            };
-            let finished = match video::run(job, on_progress, cancel).await {
+            }
+            let finished = match outcome {
                 Ok(VideoOutcome::Completed(done)) => {
                     let name = done.file_name().map(PathBuf::from).unwrap_or_else(|| "video".into());
                     let target = raudo_core::unique_path(dir.join(name), None);
@@ -321,6 +315,50 @@ impl Manager {
             };
             this.finish(id, finished, discard.load(Ordering::SeqCst));
         });
+    }
+
+    /// One yt-dlp run, persisting its progress.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_video(
+        self: &Arc<Self>,
+        id: i64,
+        request: &Request,
+        out: &std::path::Path,
+        temp: &std::path::Path,
+        title: Option<&str>,
+        format: Option<&str>,
+        audio_kbps: Option<u32>,
+        cancel: watch::Receiver<bool>,
+    ) -> std::result::Result<VideoOutcome, String> {
+        let job = VideoJob {
+            request,
+            dir: out,
+            temp_dir: temp,
+            title,
+            format,
+            audio_kbps,
+            rate_limit: self.limiter.rate(),
+        };
+        let mut last_save = Instant::now() - Duration::from_secs(1);
+        let on_progress = |p: video::Progress| {
+            if let Some(r) = self.running.lock().unwrap().get_mut(&id) {
+                r.speed = p.speed;
+                r.connections = 1;
+            }
+            if last_save.elapsed() >= Duration::from_millis(500) {
+                let db = self.db.lock().unwrap();
+                let saved = db
+                    .save_progress(id, p.downloaded, p.total)
+                    .and_then(|_| p.file.as_deref().map_or(Ok(()), |f| db.set_filename(id, f)));
+                drop(db);
+                if let Err(e) = saved {
+                    warn!(id, "save progress: {e}");
+                }
+                self.changed(id);
+                last_save = Instant::now();
+            }
+        };
+        video::run(job, on_progress, cancel).await
     }
 
     /// Persists engine snapshots and forwards throttled progress.

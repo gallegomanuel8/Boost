@@ -134,6 +134,55 @@ pub fn ext_from_mime(mime: &str) -> Option<&'static str> {
     })
 }
 
+/// Extension a user's tools recognise, as opposed to the tail of a title
+/// such as "… on Example.vid".
+pub fn has_known_extension(name: &str) -> bool {
+    const KNOWN: &[&str] = &[
+        "mp4", "m4v", "mkv", "webm", "mov", "avi", "flv", "ts", "wmv", "3gp", "mp3", "m4a", "aac", "ogg", "opus",
+        "flac", "wav", "weba", "zip", "rar", "7z", "gz", "xz", "bz2", "zst", "tar", "iso", "img", "pdf", "epub",
+        "exe", "msi", "deb", "rpm", "apk", "appimage", "dmg", "jpg", "jpeg", "png", "gif", "webp", "txt", "srt",
+        "vtt", "json", "csv", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "torrent",
+    ];
+    name.rsplit_once('.')
+        .is_some_and(|(s, e)| !s.is_empty() && KNOWN.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// File type from its first bytes, for servers that send neither a name
+/// extension nor a useful Content-Type.
+pub fn sniff_extension(head: &[u8]) -> Option<&'static str> {
+    let at = |i: usize, sig: &[u8]| head.get(i..i + sig.len()) == Some(sig);
+    Some(if at(4, b"ftyp") {
+        if at(8, b"M4A ") { "m4a" } else { "mp4" }
+    } else if at(0, &[0x1a, 0x45, 0xdf, 0xa3]) {
+        // EBML: WebM declares its doctype in the header.
+        if head.windows(4).take(64).any(|w| w == b"webm") { "webm" } else { "mkv" }
+    } else if at(0, b"OggS") {
+        "ogg"
+    } else if at(0, b"ID3") || at(0, &[0xff, 0xfb]) || at(0, &[0xff, 0xf3]) {
+        "mp3"
+    } else if at(0, b"fLaC") {
+        "flac"
+    } else if at(0, b"RIFF") && at(8, b"AVI ") {
+        "avi"
+    } else if at(0, b"RIFF") && at(8, b"WAVE") {
+        "wav"
+    } else if at(0, b"FLV") {
+        "flv"
+    } else if at(0, &[0x47]) && at(188, &[0x47]) {
+        "ts"
+    } else if at(0, b"PK\x03\x04") {
+        "zip"
+    } else if at(0, b"%PDF") {
+        "pdf"
+    } else if at(0, b"Rar!") {
+        "rar"
+    } else if at(0, &[0x37, 0x7a, 0xbc, 0xaf]) {
+        "7z"
+    } else {
+        return None;
+    })
+}
+
 pub fn has_extension(name: &str) -> bool {
     name.rsplit_once('.')
         .is_some_and(|(s, e)| !s.is_empty() && (1..=5).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()))
@@ -196,6 +245,20 @@ mod tests {
         assert!(has_extension("a.mp4"));
         assert!(!has_extension("a3i6d2sua8~yCeMWVATGL"));
         assert!(!has_extension(".bashrc"));
+        assert!(has_known_extension("a.MP4"));
+        assert!(!has_known_extension("Some title on Example.vid"));
+    }
+
+    #[test]
+    fn sniffing() {
+        let mut mp4 = vec![0, 0, 0, 0x20];
+        mp4.extend_from_slice(b"ftypisom");
+        assert_eq!(sniff_extension(&mp4), Some("mp4"));
+        let mut webm = vec![0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x82, 0x84];
+        webm.extend_from_slice(b"webm");
+        assert_eq!(sniff_extension(&webm), Some("webm"));
+        assert_eq!(sniff_extension(&[0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0]), Some("mkv"));
+        assert_eq!(sniff_extension(b"<html>"), None);
     }
 
     #[test]

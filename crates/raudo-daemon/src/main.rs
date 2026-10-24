@@ -1,5 +1,6 @@
 mod db;
 mod manager;
+mod resolver;
 mod service;
 mod video;
 

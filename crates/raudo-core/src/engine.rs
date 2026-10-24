@@ -315,6 +315,22 @@ pub async fn run(
         ctx.file.set_len(seg.pos())?;
     }
     ctx.file.sync_all()?;
+
+    let mut final_path = final_path;
+    let name = final_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if !http::has_known_extension(&name) {
+        // No usable extension from the server: tell the type from the content.
+        let mut head = [0u8; 512];
+        let n = ctx.file.read_at(&mut head, 0)?;
+        if let Some(ext) = http::sniff_extension(&head[..n]) {
+            final_path = final_path.with_file_name(format!("{name}.{ext}"));
+        }
+    }
+    // Another download may have finished under the same name since this one started.
+    if final_path.exists() {
+        final_path = unique_path(final_path, None);
+    }
+    state.filename = final_path.file_name().map(|n| n.to_string_lossy().into_owned());
     move_file(&part, &final_path)?;
     emit(Event::Snapshot(state.clone()));
     Ok(Outcome::Completed { path: final_path, state })
