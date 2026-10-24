@@ -1,0 +1,10 @@
+/target/
+
+# Proprietary IDM binaries and derived copies: never commit
+/Decompilacion IDM/
+/analisis/extensiones/
+/analisis/*.snapshot
+
+# Test downloads
+*.raudo
+*.raudo.json

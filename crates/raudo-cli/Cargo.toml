@@ -1,0 +1,16 @@
+[package]
+name = "raudo-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "raudo-cli"
+path = "src/main.rs"
+
+[dependencies]
+raudo-core = { path = "../raudo-core" }
+tokio.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tracing-subscriber.workspace = true
