@@ -69,7 +69,13 @@ function renderMedia(list) {
     const stream = m.kind !== "file";
     // Stream playlists have no useful name of their own (index.m3u8): name the file after the page.
     btn.onclick = () =>
-      download({ url: m.url, referer: tab?.url, video: stream, filename: stream ? state?.pageTitle : null }, btn);
+      download({
+        url: m.url,
+        // What the player really sent; the tab URL is only a guess for older entries.
+        referer: "referer" in m ? m.referer : tab?.url,
+        video: stream,
+        filename: stream ? state?.pageTitle : null,
+      }, btn);
     li.append(name, meta, btn);
     ul.append(li);
   }

@@ -153,15 +153,36 @@ function classify(d) {
   return { kind: "file", mime, size };
 }
 
+/**
+ * Referer actually sent with each request. Players usually live in an iframe of
+ * another site, and CDNs check that referer: the tab URL gets 403.
+ */
+const sentReferer = new Map();
+
+api.webRequest.onBeforeSendHeaders.addListener(
+  (d) => {
+    if (d.tabId < 0) return;
+    sentReferer.set(d.requestId, header(d.requestHeaders, "referer"));
+    if (sentReferer.size > 500) sentReferer.delete(sentReferer.keys().next().value);
+  },
+  { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "object", "other"] },
+  // Chrome hides Referer from listeners unless asked for extraHeaders; Firefox rejects the value.
+  IS_FIREFOX ? ["requestHeaders"] : ["requestHeaders", "extraHeaders"],
+);
+
 api.webRequest.onHeadersReceived.addListener(
   (d) => {
     if (d.tabId < 0) return;
+    const sent = sentReferer.get(d.requestId);
+    sentReferer.delete(d.requestId);
     const found = classify(d);
     if (!found) return;
     const list = media.get(d.tabId) ?? [];
     const bare = d.url.split("#")[0];
     if (list.some((m) => m.url === bare)) return;
-    list.push({ url: bare, ...found });
+    // null = the browser sent no Referer, and the server accepted that.
+    const referer = sent !== undefined ? sent : (d.documentUrl ?? d.initiator ?? null);
+    list.push({ url: bare, ...found, referer });
     media.set(d.tabId, list);
     api.storage.session?.set({ [mediaKey(d.tabId)]: list });
     updateBadge(d.tabId);
@@ -185,7 +206,8 @@ async function scanPage(tabId) {
             if (/^https?:/i.test(abs)) urls.add(abs); // blob: = MediaSource player, not a file
           }
         }
-        return [...urls];
+        // The frame holding the player is the referer its media requests carry.
+        return [...urls].map((url) => ({ url, referer: location.href }));
       },
     });
     return results.flatMap((r) => r.result || []);
@@ -274,8 +296,10 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
       const needsPermission = IS_FIREFOX && !(await api.permissions.contains({ origins: ["<all_urls>"] }));
       const list = msg.tabId != null ? [...(await mediaFor(msg.tabId))] : [];
       if (msg.tabId != null) {
-        for (const url of await scanPage(msg.tabId)) {
-          if (!list.some((m) => m.url === url)) list.push({ url, kind: kindOfUrl(url), mime: "", size: null, fromPage: true });
+        for (const { url, referer } of await scanPage(msg.tabId)) {
+          if (!list.some((m) => m.url === url)) {
+            list.push({ url, kind: kindOfUrl(url), mime: "", size: null, referer, fromPage: true });
+          }
         }
       }
       return {
