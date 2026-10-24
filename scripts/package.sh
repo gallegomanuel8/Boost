@@ -3,6 +3,7 @@
 #   boost-<version>-linux-x86_64.tar.gz    app + browser host + install.sh
 #   boost-<version>-windows-x86_64.zip     app + browser host + install.ps1
 #   boost-<version>-extension-chromium.zip the extension, to load unpacked
+#   boost-<version>-extension-firefox.xpi  the signed Firefox add-on, when there is one
 # The signed Firefox add-on (web-ext-artifacts/boost-<ext version>.xpi, from
 # scripts/sign-extension.sh) goes into both app packages when it exists.
 # Needs the x86_64-unknown-linux-musl and x86_64-pc-windows-gnu Rust targets
@@ -53,8 +54,9 @@ cp scripts/install.ps1 "$W/"
 common "$W"
 (cd "$WORK" && zip -qr "$DIST/boost-$VERSION-windows-x86_64.zip" "$(basename "$W")")
 
-echo "==> Chromium extension"
+echo "==> browser extensions"
 (cd extension && zip -qr "$DIST/boost-$VERSION-extension-chromium.zip" .)
+[[ -f "$XPI" ]] && cp "$XPI" "$DIST/boost-$VERSION-extension-firefox.xpi"
 
 rm -rf "$WORK"
 (cd "$DIST" && sha256sum boost-"$VERSION"-* > SHA256SUMS)

@@ -3269,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs 5.0.1",
  "raudo-ipc",
@@ -3291,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "raudo-core",
@@ -3304,7 +3304,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "bytes",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "raudo-service",
  "tokio",
@@ -3333,7 +3333,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-ipc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs 5.0.1",
  "getrandom 0.2.17",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-nmhost"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "raudo-ipc",
  "raudo-proto",
@@ -3357,7 +3357,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "raudo-service"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs 5.0.1",
  "libc",
