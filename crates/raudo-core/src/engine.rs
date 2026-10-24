@@ -88,7 +88,7 @@ pub fn part_location(final_path: &Path, temp_dir: Option<&Path>) -> PathBuf {
 }
 
 /// Rename, or copy + delete when the temp dir is on another filesystem.
-fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+pub fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     match std::fs::rename(from, to) {
         Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
             std::fs::copy(from, to)?;
@@ -611,7 +611,7 @@ fn resolve_final(dest: &Dest, filename: Option<&str>) -> PathBuf {
 
 /// `name.ext` -> `name (1).ext` while the final or partial file already exists.
 /// Compound extensions stay together: `a.tar.xz` -> `a (1).tar.xz`.
-fn unique_path(path: PathBuf, temp_dir: Option<&Path>) -> PathBuf {
+pub fn unique_path(path: PathBuf, temp_dir: Option<&Path>) -> PathBuf {
     let taken = |p: &Path| p.exists() || part_location(p, temp_dir).exists();
     if !taken(&path) {
         return path;

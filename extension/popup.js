@@ -59,39 +59,41 @@ async function download(d, button) {
 
 // ---------------------------------------------------------------- downloads
 
-const STATUS_LABEL = { queued: "En cola", paused: "Pausada", error: "Error", completed: "Completada" };
+async function cancel(d, button) {
+  button.disabled = true;
+  try {
+    await send({ type: "cancel", downloadId: d.id });
+    say(`Descarga cancelada: ${d.filename || shortName(d.url)}`, "ok");
+    refreshDownloads();
+  } catch (e) {
+    say(e.message, "err");
+    button.disabled = false;
+  }
+}
 
 function renderDownloads(list) {
-  // Everything unfinished, plus the five most recent finished ones.
-  const active = list.filter((d) => d.status !== "completed");
-  const shown = active.concat(list.filter((d) => d.status === "completed").slice(0, 5));
+  const shown = list.filter((d) => d.status === "downloading");
   $("downloads-section").hidden = shown.length === 0;
-  const ul = $("downloads");
-  ul.replaceChildren(
+  $("downloads").replaceChildren(
     ...shown.map((d) => {
       const pct = d.size ? Math.min(100, (d.downloaded / d.size) * 100) : null;
       const size = d.size ? `${human(d.downloaded)} / ${human(d.size)}` : human(d.downloaded) || "tamaño desconocido";
-      let meta;
-      if (d.status === "downloading") {
-        meta = [pct != null ? `${pct.toFixed(1)} %` : null, size, d.speed ? `${human(Math.round(d.speed))}/s` : null]
-          .filter(Boolean).join(" · ");
-      } else if (d.status === "error") {
-        meta = `Error: ${d.error ?? "desconocido"}`;
-      } else {
-        meta = [STATUS_LABEL[d.status], d.status === "completed" ? human(d.size) : size].filter(Boolean).join(" · ");
-      }
+      const meta = [pct != null ? `${pct.toFixed(1)} %` : null, size, d.speed ? `${human(Math.round(d.speed))}/s` : null]
+        .filter(Boolean).join(" · ");
       const bar = el("div", { className: "bar" }, el("div"));
-      if (d.status === "downloading" && pct == null) bar.classList.add("indeterminate");
-      else bar.firstChild.style.width = `${d.status === "completed" ? 100 : pct ?? 0}%`;
-      const li = el(
+      if (pct == null) bar.classList.add("indeterminate");
+      else bar.firstChild.style.width = `${pct}%`;
+      const stop = el("button", { textContent: "Cancelar", title: "Detener y borrar lo descargado" });
+      stop.onclick = () => cancel(d, stop);
+      return el(
         "li",
-        { className: d.status === "completed" ? "done" : d.status === "error" ? "failed" : "" },
+        {},
         el("div", { className: "line" },
-          el("span", { className: "name", textContent: d.filename || shortName(d.url), title: d.url })),
+          el("span", { className: "name", textContent: d.filename || shortName(d.url), title: d.url }),
+          stop),
         el("div", { className: "meta", textContent: meta, title: meta }),
         bar,
       );
-      return li;
     }),
   );
 }
@@ -203,6 +205,7 @@ async function refresh() {
   $("permission").hidden = !state.needsPermission;
   const web = /^https?:/i.test(tab?.url || "");
   $("page").hidden = !web;
+  $("audio").hidden = !web;
   $("page-hint").hidden = !web || state.videoSite;
   for (const b of ["page-best", "page-mp3", "page-formats", "formats-go"]) $(b).disabled = !state.daemonUp;
   renderMedia(state.media || []);

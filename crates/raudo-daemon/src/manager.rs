@@ -275,10 +275,13 @@ impl Manager {
             let format = stored.video.as_ref().and_then(|v| v.format.clone());
             let audio_kbps = stored.video.as_ref().and_then(|v| v.audio_kbps);
             let temp = this.temp_dir(id);
-            let title = stored.title.as_deref().map(|t| video::unique_stem(&dir, t));
+            // yt-dlp overwrites an existing output (MP3 conversion always does), so it
+            // finishes inside the temp dir and we pick a free name in `dir` ourselves.
+            let out = temp.join("out");
+            let title = stored.title.as_deref().map(video::clean_stem);
             let job = VideoJob {
                 request: &stored.request,
-                dir: &dir,
+                dir: &out,
                 temp_dir: &temp,
                 title: title.as_deref(),
                 format: format.as_deref(),
@@ -305,7 +308,14 @@ impl Manager {
                 }
             };
             let finished = match video::run(job, on_progress, cancel).await {
-                Ok(VideoOutcome::Completed(path)) => Finished::Completed(path),
+                Ok(VideoOutcome::Completed(done)) => {
+                    let name = done.file_name().map(PathBuf::from).unwrap_or_else(|| "video".into());
+                    let target = raudo_core::unique_path(dir.join(name), None);
+                    match std::fs::create_dir_all(&dir).and_then(|_| raudo_core::move_file(&done, &target)) {
+                        Ok(()) => Finished::Completed(target),
+                        Err(e) => Finished::Failed(format!("cannot move to {}: {e}", target.display())),
+                    }
+                }
                 Ok(VideoOutcome::Paused) => Finished::Paused,
                 Err(e) => Finished::Failed(e),
             };

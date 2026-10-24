@@ -26,6 +26,11 @@ enum Msg {
     Formats(PageMsg),
     /// Downloads to show in the popup.
     List,
+    /// Stop a download and discard its partial files.
+    Cancel {
+        #[serde(rename = "downloadId")]
+        download_id: i64,
+    },
 }
 
 #[derive(Deserialize)]
@@ -154,6 +159,10 @@ impl Host {
                 list.sort_by_key(|d| d["status"] == "completed");
                 list.truncate(30);
                 Ok(json!({ "downloads": list }))
+            }
+            Msg::Cancel { download_id } => {
+                self.call(|m| async move { m.remove(download_id, false).await }).await?;
+                Ok(json!({ "cancelled": download_id }))
             }
         }
     }

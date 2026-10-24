@@ -53,7 +53,7 @@
   </section>
 
   <section id="downloads-section" hidden>
-    <h2>Descargas</h2>
+    <h2>Descargas en curso</h2>
     <ul id="downloads"></ul>
   </section>
 
@@ -61,7 +61,6 @@
     <h2>Vídeo de esta página</h2>
     <div class="row">
       <button id="page-best" class="primary">Descargar vídeo</button>
-      <button id="page-mp3">Solo audio MP3</button>
       <button id="page-formats">Elegir calidad…</button>
     </div>
     <div class="row" id="formats-row" hidden style="margin-top:6px">
@@ -71,15 +70,11 @@
     <p class="hint" id="page-hint" hidden style="margin-top:6px">Usa yt-dlp: funciona en YouTube y cientos de webs.</p>
   </section>
 
-  <section>
-    <h2>Medios detectados</h2>
-    <ul id="media"></ul>
-    <p class="empty" id="media-empty"></p>
-  </section>
-
-  <section>
+  <section id="audio">
+    <h2>Audio de esta página</h2>
     <div class="row">
-      <label for="mp3-quality" class="hint">Calidad MP3</label>
+      <button id="page-mp3" class="primary">Descargar audio MP3</button>
+      <label for="mp3-quality" class="hint">Calidad</label>
       <select id="mp3-quality">
         <option value="128">128 kbps</option>
         <option value="192" selected>192 kbps</option>
@@ -88,7 +83,17 @@
         <option value="0">Máxima (VBR)</option>
       </select>
     </div>
-    <div id="msg" style="margin-top:6px"></div>
+    <p class="hint" style="margin-top:6px">Extrae solo la pista de audio del vídeo y la convierte a MP3.</p>
+  </section>
+
+  <section>
+    <h2>Medios detectados</h2>
+    <ul id="media"></ul>
+    <p class="empty" id="media-empty"></p>
+  </section>
+
+  <section>
+    <div id="msg"></div>
   </section>
 
   <script src="popup.js"></script>

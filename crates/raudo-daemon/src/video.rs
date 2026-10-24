@@ -16,8 +16,9 @@ const FILE: &str = "RAUDO-F ";
 
 pub struct VideoJob<'a> {
     pub request: &'a Request,
+    /// Where yt-dlp leaves the finished file (the caller moves it to its destination).
     pub dir: &'a Path,
-    /// Fragments and part files; only the finished file reaches `dir`.
+    /// Fragments and part files.
     pub temp_dir: &'a Path,
     /// File name without extension; `None` = yt-dlp's `title [id]`.
     pub title: Option<&'a str>,
@@ -76,32 +77,15 @@ fn js_runtime_args() -> Vec<String> {
     }
 }
 
-/// Sanitized `title`, made unique in `dir`: `Title`, `Title (2)`, ...
-/// Any existing `Title.<ext>` counts, since the extension is decided by yt-dlp.
-pub fn unique_stem(dir: &Path, title: &str) -> String {
+/// `title` usable as a file name stem. Uniqueness is settled when the finished
+/// file is moved out of the temp dir, once its real extension is known.
+pub fn clean_stem(title: &str) -> String {
     let clean: String = title
         .chars()
         .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
         .collect();
-    let mut stem: String = clean.trim().trim_start_matches('.').chars().take(150).collect();
-    if stem.is_empty() {
-        stem = "video".into();
-    }
-    let taken = |s: &str| {
-        std::fs::read_dir(dir)
-            .map(|rd| {
-                rd.flatten().any(|e| {
-                    let n = e.file_name();
-                    let n = n.to_string_lossy();
-                    n.strip_prefix(s).is_some_and(|rest| rest.starts_with('.'))
-                })
-            })
-            .unwrap_or(false)
-    };
-    if !taken(&stem) {
-        return stem;
-    }
-    (2..).map(|n| format!("{stem} ({n})")).find(|s| !taken(s)).expect("unbounded range")
+    let stem: String = clean.trim().trim_start_matches('.').chars().take(150).collect();
+    if stem.is_empty() { "video".into() } else { stem }
 }
 
 fn context_args(req: &Request) -> Vec<String> {
@@ -368,17 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn stems_are_unique_and_clean() {
-        let dir = std::env::temp_dir().join(format!("raudo-stem-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(unique_stem(&dir, " a/b "), "a_b");
-        std::fs::write(dir.join("a_b.mp4"), b"").unwrap();
-        std::fs::write(dir.join("a_b (2).mkv"), b"").unwrap();
-        assert_eq!(unique_stem(&dir, "a/b"), "a_b (3)");
-        // `a_b extra.mp4` shares the prefix but is a different name.
-        assert_eq!(unique_stem(&dir, "a_b extra"), "a_b extra");
-        assert_eq!(unique_stem(&dir, "..."), "video");
-        std::fs::remove_dir_all(&dir).unwrap();
+    fn stems_are_clean() {
+        assert_eq!(clean_stem(" a/b "), "a_b");
+        assert_eq!(clean_stem("..."), "video");
+        assert_eq!(clean_stem(&"x".repeat(400)).len(), 150);
     }
 
     #[test]

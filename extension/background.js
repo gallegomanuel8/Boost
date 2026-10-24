@@ -324,6 +324,9 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     if (msg.type === "list") {
       return (await call({ type: "list" })).downloads;
     }
+    if (msg.type === "cancel") {
+      return (await call({ type: "cancel", downloadId: msg.downloadId })).cancelled;
+    }
     if (msg.type === "formats") {
       const cookies = await cookieHeader(msg.url);
       return (await call({ type: "formats", url: msg.url, cookies, userAgent: navigator.userAgent })).media;
