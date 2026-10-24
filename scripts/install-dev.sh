@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Installs raudo for the current user (no root):
 #   ~/.local/bin/raudo-{daemon,cli,nmhost}
-#   D-Bus activation file, so the daemon starts on first use
+#   session autostart entry for the service (the browser host also starts it on demand)
 #   Native Messaging manifests for the browsers found in $HOME
 # Usage: scripts/install-dev.sh [--uninstall]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$HOME/.local/bin"
-DBUS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
+# Left by versions that used D-Bus activation; removed on install.
+OLD_DBUS_SERVICE="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.raudo.Manager.service"
+AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/raudo-daemon.desktop"
 HOST_NAME="org.raudo.nmhost"
 CHROME_ID="boloeecmdjhgdkcahinhhpakjhiljbhi"
 FIREFOX_ID="raudo@raudo.org"
@@ -30,8 +32,9 @@ FIREFOX_NM_DIR="$HOME/.mozilla/native-messaging-hosts"
 OLD_FIREFOX_NM_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/native-messaging-hosts"
 
 # Flatpak Chromium-family browsers ("app id:config dir"). They are sandboxed: each gets
-# a static copy of the host inside its own data dir, and D-Bus access to org.raudo.Manager
-# only (no flatpak-spawn --host, which would let the browser run any host command).
+# a static copy of the host inside its own data dir, and access to $XDG_RUNTIME_DIR/raudo
+# only, where the service socket and token live (no flatpak-spawn --host, which would
+# let the browser run any host command).
 FLATPAK_CHROMIUM=(
     "com.brave.Browser:BraveSoftware/Brave-Browser"
     "org.chromium.Chromium:chromium"
@@ -51,9 +54,12 @@ uninstall() {
         cfg=${entry#*:}
         rm -f "$HOME/.var/app/$app/config/$cfg/NativeMessagingHosts/$HOST_NAME.json"
         rm -rf "$HOME/.var/app/$app/data/raudo"
-        flatpak_installed "$app" && flatpak override --user --no-talk-name=org.raudo.Manager "$app" 2>/dev/null || true
+        if flatpak_installed "$app"; then
+            flatpak override --user --nofilesystem=xdg-run/raudo "$app" 2>/dev/null || true
+            flatpak override --user --no-talk-name=org.raudo.Manager "$app" 2>/dev/null || true
+        fi
     done
-    rm -f "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$DBUS_DIR/org.raudo.Manager.service"
+    rm -f "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
     for d in "${CHROMIUM_DIRS[@]}"; do rm -f "$d/NativeMessagingHosts/$HOST_NAME.json"; done
     rm -f "$FIREFOX_NM_DIR/$HOST_NAME.json" "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
     echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
@@ -73,15 +79,23 @@ for b in raudo-daemon raudo-cli raudo-nmhost; do
     install -m 755 "$ROOT/target/release/$b" "$BIN/$b"
 done
 
-echo "==> D-Bus activation"
-mkdir -p "$DBUS_DIR"
-cat > "$DBUS_DIR/org.raudo.Manager.service" <<EOF
-[D-BUS Service]
-Name=org.raudo.Manager
+if [[ -f "$OLD_DBUS_SERVICE" ]]; then
+    rm -f "$OLD_DBUS_SERVICE"
+    busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
+fi
+
+echo "==> autostart with the session"
+# Sandboxed browsers cannot start the service themselves; this keeps it available.
+mkdir -p "$(dirname "$AUTOSTART")"
+cat > "$AUTOSTART" <<EOF
+[Desktop Entry]
+Type=Application
+Name=raudo
+Comment=raudo download service
 Exec=$BIN/raudo-daemon
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
 EOF
-# dbus-broker only picks up new .service files after a reload.
-busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 
 echo "==> Native Messaging manifests"
 for d in "${CHROMIUM_DIRS[@]}"; do
@@ -138,7 +152,8 @@ if ((${#flatpak_apps[@]})); then
   "allowed_origins": ["chrome-extension://$CHROME_ID/"]
 }
 EOF
-        flatpak override --user --talk-name=org.raudo.Manager "$app"
+        flatpak override --user --no-talk-name=org.raudo.Manager "$app" 2>/dev/null || true
+        flatpak override --user --filesystem=xdg-run/raudo "$app"
         # The sandbox cannot read the project folder: keep a copy of the extension it can
         # load unpacked. Re-running this script updates it (then reload it in the browser).
         rm -rf "$HOME/.var/app/$app/data/raudo/extension"

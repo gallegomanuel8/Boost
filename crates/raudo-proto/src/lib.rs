@@ -1,13 +1,6 @@
-//! Types and D-Bus interface shared by the daemon and its clients (CLI, GTK, nmhost).
-//!
-//! Structured values cross D-Bus as JSON strings: D-Bus has no optional fields,
-//! and every client already speaks serde.
+//! Types shared by the raudo service and its clients (app, CLI, browser host).
 
 use serde::{Deserialize, Serialize};
-
-pub const BUS_NAME: &str = "org.raudo.Manager";
-pub const OBJECT_PATH: &str = "/org/raudo/Manager";
-pub const INTERFACE: &str = "org.raudo.Manager1";
 
 /// What to fetch and with which browser context (cookies, referer, UA).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -134,30 +127,4 @@ pub struct DownloadInfo {
     /// Unix seconds.
     #[serde(default)]
     pub created_at: i64,
-}
-
-#[zbus::proxy(interface = "org.raudo.Manager1", default_service = "org.raudo.Manager", default_path = "/org/raudo/Manager")]
-pub trait Manager {
-    /// `download`: JSON `AddDownload`. Returns the new id.
-    fn add(&self, download: &str) -> zbus::Result<i64>;
-    /// JSON array of `DownloadInfo`.
-    fn list(&self) -> zbus::Result<String>;
-    fn pause(&self, id: i64) -> zbus::Result<()>;
-    fn resume(&self, id: i64) -> zbus::Result<()>;
-    /// Removes the entry; `delete_file` also deletes a completed file.
-    fn remove(&self, id: i64, delete_file: bool) -> zbus::Result<()>;
-    /// KiB/s, 0 = unlimited.
-    fn set_speed_limit(&self, kib_per_sec: u64) -> zbus::Result<()>;
-    fn set_max_concurrent(&self, n: u32) -> zbus::Result<()>;
-    /// `request`: JSON `Request` of a video page. Returns JSON `MediaInfo`.
-    fn formats(&self, request: &str) -> zbus::Result<String>;
-    /// `target`: "page" → `{supported, via}`; "hls" → stream info (quality,
-    /// duration, container, variant URLs). Returns JSON.
-    fn inspect(&self, target: &str, request: &str) -> zbus::Result<String>;
-
-    /// JSON `DownloadInfo`, emitted on every state change and periodically while downloading.
-    #[zbus(signal)]
-    fn changed(&self, info: String) -> zbus::Result<()>;
-    #[zbus(signal)]
-    fn removed(&self, id: i64) -> zbus::Result<()>;
 }

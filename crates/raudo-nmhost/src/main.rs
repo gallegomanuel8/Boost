@@ -1,10 +1,14 @@
-//! Native Messaging host: bridges the browser extension to raudo-daemon over D-Bus.
+//! Native Messaging host: bridges the browser extension to the raudo service over
+//! its local IPC (Unix socket / Windows named pipe), starting raudo if needed.
 //!
 //! Browser side framing (Chrome and Firefox): `u32` little-endian length + UTF-8 JSON.
 //! Every request carries an `id` that is echoed in its response. stdout carries
 //! protocol frames only; diagnostics go to stderr (shown in the browser console).
 
-use raudo_proto::{AddDownload, ManagerProxy, Request, VideoOptions};
+use std::time::Duration;
+
+use raudo_ipc::{Client, ClientError};
+use raudo_proto::{AddDownload, Request, VideoOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -111,28 +115,94 @@ fn config() -> Value {
 }
 
 struct Host {
-    manager: Option<ManagerProxy<'static>>,
+    client: Option<Client>,
+}
+
+/// The app (or the headless service) installed next to this host.
+fn service_executable() -> Option<std::path::PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let exe = |name: &str| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    [exe("raudo"), exe("raudo-daemon")].into_iter().find(|p| p.is_file())
+}
+
+/// Starts raudo in the background, detached from the browser's process group.
+fn launch_service() -> bool {
+    let Some(exe) = service_executable() else { return false };
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if exe.file_stem().is_some_and(|s| s == "raudo") {
+        cmd.arg("--background");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own session: closing the browser must not stop the downloads.
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    cmd.spawn().is_ok()
+}
+
+fn remote(e: ClientError) -> String {
+    match e {
+        ClientError::NotRunning => "raudo is not running".into(),
+        other => other.to_string(),
+    }
 }
 
 impl Host {
-    async fn manager(&mut self) -> Result<&ManagerProxy<'static>, String> {
-        if self.manager.is_none() {
-            let conn = zbus::Connection::session().await.map_err(|e| format!("no D-Bus session: {e}"))?;
-            let proxy = ManagerProxy::new(&conn).await.map_err(|e| e.to_string())?;
-            self.manager = Some(proxy);
+    /// Connected client; starts raudo once if it is not running.
+    async fn client(&mut self) -> Result<&mut Client, String> {
+        if self.client.is_none() {
+            let client = match Client::connect("nmhost").await {
+                Ok(c) => c,
+                Err(ClientError::NotRunning) if launch_service() => {
+                    let mut last = ClientError::NotRunning;
+                    let mut connected = None;
+                    for _ in 0..50 {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        match Client::connect("nmhost").await {
+                            Ok(c) => {
+                                connected = Some(c);
+                                break;
+                            }
+                            Err(e) => last = e,
+                        }
+                    }
+                    connected.ok_or_else(|| remote(last))?
+                }
+                Err(e) => return Err(remote(e)),
+            };
+            self.client = Some(client);
         }
-        Ok(self.manager.as_ref().expect("just set"))
+        Ok(self.client.as_mut().expect("just set"))
+    }
+
+    /// Runs one request; on a broken connection (raudo restarted) reconnects once.
+    async fn call(&mut self, call: raudo_ipc::Call) -> Result<Value, String> {
+        match self.client().await?.call(call.clone()).await {
+            Ok(v) => Ok(v),
+            Err(ClientError::Remote(e)) => Err(e),
+            Err(_) => {
+                self.client = None;
+                self.client().await?.call(call).await.map_err(remote)
+            }
+        }
     }
 
     async fn handle(&mut self, msg: Msg) -> Result<Value, String> {
+        use raudo_ipc::Call;
         match msg {
             Msg::Hello { browser } => {
                 eprintln!("raudo-nmhost: hello from {}", browser.as_deref().unwrap_or("?"));
-                // Reachability check, so the extension can show "daemon not running".
-                let daemon = match self.manager().await {
-                    Ok(m) => m.list().await.is_ok(),
-                    Err(_) => false,
-                };
+                // Reachability check, so the extension can show "raudo is not running".
+                let daemon = self.call(Call::Ping).await.is_ok();
                 Ok(json!({ "protocol": PROTOCOL, "daemon": daemon, "config": config() }))
             }
             Msg::Download(d) => {
@@ -145,29 +215,16 @@ impl Host {
                     paused: false,
                     video: video.then_some(VideoOptions { format: d.format, audio_kbps: d.audio_kbps }),
                 };
-                let body = serde_json::to_string(&add).expect("serializable");
-                let id = self
-                    .call(|m| {
-                        let body = body.clone();
-                        async move { m.add(&body).await }
-                    })
-                    .await?;
+                let id = self.call(Call::Add(add)).await?;
                 Ok(json!({ "downloadId": id }))
             }
             Msg::Formats(p) => {
-                let body = serde_json::to_string(&p.request()).expect("serializable");
-                let info = self
-                    .call(|m| {
-                        let body = body.clone();
-                        async move { m.formats(&body).await }
-                    })
-                    .await?;
-                let info: Value = serde_json::from_str(&info).map_err(|e| e.to_string())?;
+                let info = self.call(Call::Formats(p.request())).await?;
                 Ok(json!({ "media": info }))
             }
             Msg::List => {
-                let list = self.call(|m| async move { m.list().await }).await?;
-                let mut list: Vec<Value> = serde_json::from_str(&list).map_err(|e| e.to_string())?;
+                let list = self.call(Call::List).await?;
+                let mut list: Vec<Value> = serde_json::from_value(list).map_err(|e| e.to_string())?;
                 // Newest first, unfinished on top; cap so the reply stays far below 1 MiB.
                 list.reverse();
                 list.sort_by_key(|d| d["status"] == "completed");
@@ -175,45 +232,12 @@ impl Host {
                 Ok(json!({ "downloads": list }))
             }
             Msg::Inspect(i) => {
-                let body = serde_json::to_string(&i.page.request()).expect("serializable");
-                let target = i.target;
-                let info = self
-                    .call(|m| {
-                        let body = body.clone();
-                        let target = target.clone();
-                        async move { m.inspect(&target, &body).await }
-                    })
-                    .await?;
-                let info: Value = serde_json::from_str(&info).map_err(|e| e.to_string())?;
+                let info = self.call(Call::Inspect { target: i.target, request: i.page.request() }).await?;
                 Ok(json!({ "info": info }))
             }
             Msg::Cancel { download_id } => {
-                self.call(|m| async move { m.remove(download_id, false).await }).await?;
+                self.call(Call::Remove { id: download_id, delete_file: false }).await?;
                 Ok(json!({ "cancelled": download_id }))
-            }
-        }
-    }
-
-    /// Runs a D-Bus call; on a stale connection reconnects once.
-    async fn call<T, F, Fut>(&mut self, f: F) -> Result<T, String>
-    where
-        F: Fn(ManagerProxy<'static>) -> Fut,
-        Fut: std::future::Future<Output = zbus::Result<T>>,
-    {
-        let m = self.manager().await?.clone();
-        match f(m).await {
-            Ok(v) => Ok(v),
-            Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown" => {
-                Err("raudo-daemon is not running".into())
-            }
-            Err(zbus::Error::MethodError(name, msg, _)) => Err(msg.unwrap_or_else(|| name.to_string())),
-            Err(_) => {
-                self.manager = None;
-                let m = self.manager().await?.clone();
-                f(m).await.map_err(|e| match e {
-                    zbus::Error::MethodError(name, msg, _) => msg.unwrap_or_else(|| name.to_string()),
-                    e => format!("raudo daemon not reachable: {e}"),
-                })
             }
         }
     }
@@ -251,7 +275,7 @@ async fn write_frame(stdout: &mut tokio::io::Stdout, v: &Value) -> std::io::Resu
 async fn main() -> std::io::Result<()> {
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
-    let mut host = Host { manager: None };
+    let mut host = Host { client: None };
 
     while let Some(frame) = read_frame(&mut stdin).await? {
         let raw: Value = match serde_json::from_slice(&frame) {

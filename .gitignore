@@ -10,3 +10,4 @@
 *.raudo.json
 /extension-key.pem
 /web-ext-artifacts/
+/extension/.amo-upload-uuid

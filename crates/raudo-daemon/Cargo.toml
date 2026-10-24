@@ -9,17 +9,7 @@ name = "raudo-daemon"
 path = "src/main.rs"
 
 [dependencies]
-raudo-proto.workspace = true
-raudo-core.workspace = true
+raudo-service.workspace = true
 tokio.workspace = true
-reqwest.workspace = true
-zbus.workspace = true
-rusqlite.workspace = true
-dirs.workspace = true
-libc = "0.2"
-regex = "1"
-url.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

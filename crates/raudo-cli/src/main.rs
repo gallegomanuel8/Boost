@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use futures_util::StreamExt;
 use raudo_core::{Dest, Event, Job, Limiter, Options, Outcome, Request, State};
-use raudo_proto::{AddDownload, DownloadInfo, ManagerProxy, MediaInfo, Status, VideoOptions};
+use raudo_ipc::{Client, Event as IpcEvent};
+use raudo_proto::{AddDownload, DownloadInfo, Status, VideoOptions};
 use tokio::sync::{mpsc, watch};
 
 #[derive(Parser)]
@@ -117,8 +117,7 @@ async fn main() -> std::process::ExitCode {
 type AnyResult = Result<(), Box<dyn std::error::Error>>;
 
 async fn daemon(cmd: Cmd) -> AnyResult {
-    let conn = zbus::Connection::session().await?;
-    let mgr = ManagerProxy::new(&conn).await?;
+    let mut mgr = Client::connect("cli").await?;
     match cmd {
         Cmd::Get(_) => unreachable!(),
         Cmd::Add { url, dir, output, paused, referer, cookies, video, format, mp3, title } => {
@@ -132,12 +131,12 @@ async fn daemon(cmd: Cmd) -> AnyResult {
                 video: (video || format.is_some() || mp3.is_some())
                     .then_some(VideoOptions { format, audio_kbps: mp3 }),
             };
-            let id = mgr.add(&serde_json::to_string(&add)?).await?;
+            let id = mgr.add(add).await?;
             println!("{id}");
         }
         Cmd::Formats { url } => {
             let req = Request { url, ..Default::default() };
-            let info: MediaInfo = serde_json::from_str(&mgr.formats(&serde_json::to_string(&req)?).await?)?;
+            let info = mgr.formats(req).await?;
             println!("{}", info.title);
             println!("{:<12} {:<5} {:<11} {:>5} {:<14} {:<12} {:>10}  NOTE", "ID", "EXT", "RESOLUTION", "FPS", "VIDEO", "AUDIO", "SIZE");
             for f in &info.formats {
@@ -155,7 +154,7 @@ async fn daemon(cmd: Cmd) -> AnyResult {
             }
         }
         Cmd::List => {
-            let list: Vec<DownloadInfo> = serde_json::from_str(&mgr.list().await?)?;
+            let list = mgr.list().await?;
             println!("{:>4}  {:<11}  {:>6}  {:>10}  {:>11}  NAME", "ID", "STATUS", "%", "SIZE", "SPEED");
             for d in &list {
                 print_row(d);
@@ -167,10 +166,10 @@ async fn daemon(cmd: Cmd) -> AnyResult {
         Cmd::Limit { kib } => mgr.set_speed_limit(kib).await?,
         Cmd::Concurrent { n } => mgr.set_max_concurrent(n).await?,
         Cmd::Watch => {
-            let mut changes = mgr.receive_changed().await?;
-            while let Some(sig) = changes.next().await {
-                if let Ok(d) = serde_json::from_str::<DownloadInfo>(&sig.args()?.info) {
-                    print_row(&d);
+            mgr.subscribe().await?;
+            while let Some(ev) = mgr.next_event().await? {
+                if let IpcEvent::Changed { info } = ev {
+                    print_row(&info);
                 }
             }
         }

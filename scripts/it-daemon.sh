@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Daemon integration test on a private D-Bus session and a throwaway data dir.
+# Service integration test with a private IPC endpoint and a throwaway data dir.
 # Usage: scripts/it-daemon.sh   (builds first; needs network access to cdn.kernel.org)
 set -euo pipefail
 
-if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" || -z "${RAUDO_IT_INNER:-}" ]]; then
-    cargo build --quiet
-    RAUDO_IT_INNER=1 exec dbus-run-session -- "$0" "$@"
-fi
-
-B="$(cd "$(dirname "$0")/.." && pwd)/target/debug"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+(cd "$ROOT" && cargo build --quiet)
+B="$ROOT/target/debug"
 T=$(mktemp -d)
-trap 'kill $D 2>/dev/null || true; rm -rf "$T"' EXIT
+# Short runtime dir: Unix socket paths are limited to 108 bytes.
+RT=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/raudo-it.XXXX")
+D=""
+trap 'kill $D 2>/dev/null || true; rm -rf "$T" "$RT"' EXIT
 cd "$T"; mkdir -p data dl
-export XDG_DATA_HOME=$T/data RUST_LOG=warn
+export XDG_RUNTIME_DIR=$RT XDG_DATA_HOME=$T/data XDG_CACHE_HOME=$T/cache RUST_LOG=warn
 BASE=https://cdn.kernel.org/pub/linux/kernel/v6.x
 cli() { "$B/raudo-cli" "$@"; }
 

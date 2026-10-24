@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use raudo_core::{hls, Dest, Error as EngineError, Event, Job, Limiter, Options, Outcome};
 use raudo_proto::{AddDownload, DownloadInfo, MediaInfo, Request, Status, VideoOptions};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
 
 use crate::db::{Db, Stored};
@@ -28,12 +28,6 @@ fn is_manifest(url: &str) -> bool {
     path.ends_with(".m3u8") || path.ends_with(".mpd")
 }
 
-/// Notifications for D-Bus clients.
-pub enum Notify {
-    Changed(DownloadInfo),
-    Removed(i64),
-}
-
 struct Running {
     cancel: watch::Sender<bool>,
     /// Set by `remove`: delete the partial file once the engine has stopped.
@@ -51,7 +45,8 @@ pub struct Manager {
     /// Partial files live in `<temp_root>/<id>/`, never in the user's download folder.
     temp_root: PathBuf,
     running: Mutex<HashMap<i64, Running>>,
-    notify: mpsc::UnboundedSender<Notify>,
+    /// Changes for subscribed clients (app window, CLI `watch`).
+    events: broadcast::Sender<raudo_ipc::Event>,
     /// Pauses caused by shutdown keep the download queued for the next start.
     shutting_down: AtomicBool,
     /// `inspect` answers by target and URL.
@@ -65,7 +60,7 @@ fn db_err(e: rusqlite::Error) -> String {
 }
 
 impl Manager {
-    pub fn new(db: Db, default_dir: PathBuf, temp_root: PathBuf, notify: mpsc::UnboundedSender<Notify>) -> Arc<Self> {
+    pub fn new(db: Db, default_dir: PathBuf, temp_root: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             db: Mutex::new(db),
             client: raudo_core::client().expect("TLS backend available"),
@@ -74,7 +69,7 @@ impl Manager {
             default_dir,
             temp_root,
             running: Mutex::new(HashMap::new()),
-            notify,
+            events: broadcast::channel(256).0,
             shutting_down: AtomicBool::new(false),
             inspected: Mutex::new(HashMap::new()),
         })
@@ -163,7 +158,7 @@ impl Manager {
             }
         }
         self.db.lock().unwrap().delete(id).map_err(db_err)?;
-        let _ = self.notify.send(Notify::Removed(id));
+        let _ = self.events.send(raudo_ipc::Event::Removed { id });
         Ok(())
     }
 
@@ -178,6 +173,10 @@ impl Manager {
                 warn!(id, "cannot remove {}: {e}", dir.display());
             }
         }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<raudo_ipc::Event> {
+        self.events.subscribe()
     }
 
     pub async fn formats(&self, request: &Request) -> Result<MediaInfo> {
@@ -559,7 +558,7 @@ impl Manager {
                 info.speed = r.speed;
                 info.connections = r.connections;
             }
-            let _ = self.notify.send(Notify::Changed(info));
+            let _ = self.events.send(raudo_ipc::Event::Changed { info });
         }
     }
 }
