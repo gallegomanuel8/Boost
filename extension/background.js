@@ -128,9 +128,22 @@ const MIME_EXT = {
   "video/mp4": "mp4", "video/webm": "webm", "video/x-matroska": "mkv", "audio/mpeg": "mp3", "audio/flac": "flac",
 };
 
+/** How old a download may be and still count as just started. */
+const NEW_DOWNLOAD_MS = 30_000;
+
+/**
+ * Chromium also fires onCreated for the download history it loads at startup
+ * (finished or interrupted items, from long ago): those are not new downloads.
+ */
+function isNewDownload(item) {
+  if (item.state !== "in_progress") return false;
+  const started = Date.parse(item.startTime);
+  return Number.isNaN(started) || Date.now() - started < NEW_DOWNLOAD_MS;
+}
+
 function shouldCapture(item) {
   const c = config?.capture;
-  if (!c?.enabled || !daemonUp) return false;
+  if (!c?.enabled || !daemonUp || !isNewDownload(item)) return false;
   const url = item.finalUrl || item.url;
   if (!/^https?:/i.test(url) || passThrough.has(url)) return false;
   let path = "";
