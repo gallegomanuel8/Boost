@@ -15,8 +15,15 @@ if [[ -z "${WEB_EXT_API_SECRET:-}" ]]; then
     read -rsp "Secreto JWT: " WEB_EXT_API_SECRET </dev/tty
     echo
 fi
-[[ "$WEB_EXT_API_KEY" == user:* && -n "$WEB_EXT_API_SECRET" ]] || {
-    echo "Claves vacías o con formato incorrecto (el emisor empieza por 'user:')." >&2
+# Pasted values often carry stray spaces or newlines.
+WEB_EXT_API_KEY=$(tr -d '[:space:]' <<<"$WEB_EXT_API_KEY")
+WEB_EXT_API_SECRET=$(tr -d '[:space:]' <<<"$WEB_EXT_API_SECRET")
+[[ "$WEB_EXT_API_KEY" =~ ^user:[0-9]+:[0-9]+$ ]] || {
+    echo "El emisor debe tener la forma user:NNNN:NNN" >&2
+    exit 1
+}
+[[ "$WEB_EXT_API_SECRET" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "El secreto debe tener 64 caracteres hexadecimales (se leyeron ${#WEB_EXT_API_SECRET})." >&2
     exit 1
 }
 export WEB_EXT_API_KEY WEB_EXT_API_SECRET
