@@ -3,7 +3,7 @@
 //! Windows: manifests next to this executable, referenced from
 //! `HKCU\Software\<browser>\NativeMessagingHosts\org.raudo.nmhost`.
 //! Linux: manifests in each installed browser's per-user folder (sandboxed
-//! Flatpak browsers are set up by scripts/install-dev.sh instead).
+//! Flatpak browsers are set up by scripts/install.sh instead).
 //!
 //! Also the `boost:` link the extension opens to launch Boost when this host
 //! cannot start it (Windows: registry; Linux: the .desktop file of the app).

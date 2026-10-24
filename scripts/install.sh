@@ -1,12 +1,30 @@
 #!/usr/bin/env bash
-# Installs raudo for the current user (no root):
-#   ~/.local/bin/raudo-{daemon,cli,nmhost}
-#   session autostart entry for the service (the browser host also starts it on demand)
-#   Native Messaging manifests for the browsers found in $HOME
-# Usage: scripts/install-dev.sh [--uninstall]
+# Installs Boost for the current user (no root):
+#   ~/.local/bin/boost (the app) and raudo-{nmhost,cli,daemon}
+#   application menu entry and the boost:// link that launches it
+#   Native Messaging manifests for the browsers found in $HOME (Flatpak ones too)
+#
+# Works from the source tree (scripts/install.sh: builds first) and from the
+# downloaded Linux package (./install.sh: uses the binaries in bin/).
+# Usage: install.sh [--uninstall]
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+STATIC_TARGET="x86_64-unknown-linux-musl"
+if [[ -f "$HERE/../Cargo.toml" ]]; then
+    FROM_SOURCE=1
+    ROOT="$(cd "$HERE/.." && pwd)"
+    BIN_SRC="$ROOT/target/release"
+    STATIC_HOST="$ROOT/target/$STATIC_TARGET/release/raudo-nmhost"
+    ICON_SRC="$ROOT/crates/raudo-app/icons"
+else
+    FROM_SOURCE=0
+    ROOT="$HERE"
+    BIN_SRC="$ROOT/bin"
+    STATIC_HOST="$ROOT/bin/flatpak/raudo-nmhost"
+    ICON_SRC="$ROOT/icons"
+fi
+EXTENSION="$ROOT/extension"
 BIN="$HOME/.local/bin"
 # Left by versions that used D-Bus activation; removed on install.
 OLD_DBUS_SERVICE="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.raudo.Manager.service"
@@ -39,8 +57,6 @@ FLATPAK_CHROMIUM=(
     "com.microsoft.Edge:microsoft-edge"
     "com.vivaldi.Vivaldi:vivaldi"
 )
-STATIC_TARGET="x86_64-unknown-linux-musl"
-
 flatpak_installed() {
     command -v flatpak >/dev/null && flatpak info "$1" >/dev/null 2>&1
 }
@@ -60,7 +76,8 @@ uninstall() {
     rm -f "${OLD_APP[@]}" "$BIN/boost" "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
     rm -f "$APPS_DIR/org.boost.app.desktop" "$ICONS"/{32x32,128x128,256x256,512x512}/apps/org.boost.app.png
     rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
-    echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
+    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/boost"
+    echo "Boost removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
 }
 
 if [[ "${1:-}" == "--uninstall" ]]; then
@@ -68,13 +85,15 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     exit 0
 fi
 
-echo "==> building release binaries"
-(cd "$ROOT" && cargo build --release --quiet -p raudo-app -p raudo-daemon -p raudo-cli -p raudo-nmhost)
+if ((FROM_SOURCE)); then
+    echo "==> building release binaries"
+    (cd "$ROOT" && cargo build --release --quiet -p raudo-app -p raudo-daemon -p raudo-cli -p raudo-nmhost)
+fi
 
 echo "==> installing binaries into $BIN"
 mkdir -p "$BIN"
 for b in boost raudo-daemon raudo-cli raudo-nmhost; do
-    install -m 755 "$ROOT/target/release/$b" "$BIN/$b"
+    [[ -f "$BIN_SRC/$b" ]] && install -m 755 "$BIN_SRC/$b" "$BIN/$b"
 done
 
 if [[ -f "$OLD_DBUS_SERVICE" ]]; then
@@ -84,10 +103,10 @@ fi
 
 echo "==> application menu entry"
 rm -f "${OLD_APP[@]}"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/32x32.png" "$ICONS/32x32/apps/org.boost.app.png"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128.png" "$ICONS/128x128/apps/org.boost.app.png"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/128x128@2x.png" "$ICONS/256x256/apps/org.boost.app.png"
-install -D -m 644 "$ROOT/crates/raudo-app/icons/icon.png" "$ICONS/512x512/apps/org.boost.app.png"
+install -D -m 644 "$ICON_SRC/32x32.png" "$ICONS/32x32/apps/org.boost.app.png"
+install -D -m 644 "$ICON_SRC/128x128.png" "$ICONS/128x128/apps/org.boost.app.png"
+install -D -m 644 "$ICON_SRC/128x128@2x.png" "$ICONS/256x256/apps/org.boost.app.png"
+install -D -m 644 "$ICON_SRC/icon.png" "$ICONS/512x512/apps/org.boost.app.png"
 mkdir -p "$APPS_DIR"
 cat > "$APPS_DIR/org.boost.app.desktop" <<EOF
 [Desktop Entry]
@@ -108,6 +127,20 @@ gtk-update-icon-cache -q -t "$ICONS" >/dev/null 2>&1 || true
 # KDE caches menu entries and their icons.
 kbuildsycoca6 >/dev/null 2>&1 || true
 
+echo "==> browser extension files"
+# Fixed place for the unpacked extension (Chromium browsers load it from here) and the
+# signed Firefox add-on (Preferencias → Extensiones web installs it from here).
+SHARE="${XDG_DATA_HOME:-$HOME/.local/share}/boost"
+rm -rf "$SHARE/extension"
+mkdir -p "$SHARE"
+cp -r "$EXTENSION" "$SHARE/extension"
+if ((FROM_SOURCE)); then
+    XPI=$(ls -t "$ROOT"/web-ext-artifacts/boost-*.xpi 2>/dev/null | head -1 || true)
+else
+    XPI="$ROOT/boost.xpi"
+fi
+[[ -n "$XPI" && -f "$XPI" ]] && install -m 644 "$XPI" "$SHARE/boost.xpi"
+
 # Boost runs only while the app is open: no background service at login. The
 # extension offers to launch it (sandboxed browsers through the boost: link).
 rm -f "$AUTOSTART"
@@ -124,13 +157,15 @@ for entry in "${FLATPAK_CHROMIUM[@]}"; do
 done
 if ((${#flatpak_apps[@]})); then
     echo "==> static host for Flatpak browsers"
-    rustup target add "$STATIC_TARGET" >/dev/null 2>&1 || true
-    (cd "$ROOT" && cargo build --release --quiet -p raudo-nmhost --target "$STATIC_TARGET")
+    if ((FROM_SOURCE)); then
+        rustup target add "$STATIC_TARGET" >/dev/null 2>&1 || true
+        (cd "$ROOT" && cargo build --release --quiet -p raudo-nmhost --target "$STATIC_TARGET")
+    fi
     for entry in "${flatpak_apps[@]}"; do
         app=${entry%%:*}
         cfg=${entry#*:}
         host_bin="$HOME/.var/app/$app/data/raudo/raudo-nmhost"
-        install -D -m 755 "$ROOT/target/$STATIC_TARGET/release/raudo-nmhost" "$host_bin"
+        install -D -m 755 "$STATIC_HOST" "$host_bin"
         nm_dir="$HOME/.var/app/$app/config/$cfg/NativeMessagingHosts"
         mkdir -p "$nm_dir"
         cat > "$nm_dir/$HOST_NAME.json" <<EOF
@@ -147,15 +182,18 @@ EOF
         # The sandbox cannot read the project folder: keep a copy of the extension it can
         # load unpacked. Re-running this script updates it (then reload it in the browser).
         rm -rf "$HOME/.var/app/$app/data/raudo/extension"
-        cp -r "$ROOT/extension" "$HOME/.var/app/$app/data/raudo/extension"
+        cp -r "$EXTENSION" "$HOME/.var/app/$app/data/raudo/extension"
         echo "    $app (flatpak) — extension: $HOME/.var/app/$app/data/raudo/extension"
     done
 fi
 
 cat <<EOF
 
-Done. Load the extension from: $ROOT/extension
-  Chrome/Chromium: chrome://extensions → Developer mode → Load unpacked
-  Firefox:         about:debugging#/runtime/this-firefox → Load Temporary Add-on → manifest.json
-Snap browsers and Flatpak Firefox are not supported yet.
+Boost instalado. Ábrelo desde el menú de aplicaciones.
+Extensión del navegador:
+  Firefox:                Boost → Preferencias → Extensiones web → Instalar extensión
+  Chrome/Brave/Edge:      chrome://extensions → Modo de desarrollador → Cargar descomprimida →
+                          $SHARE/extension
+                          (navegadores Flatpak: la carpeta indicada arriba para cada uno)
+Los navegadores Snap y Firefox en Flatpak todavía no son compatibles.
 EOF

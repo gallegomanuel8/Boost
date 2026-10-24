@@ -120,10 +120,16 @@ fn chromium_profile_has_raudo(profile: &Path) -> bool {
     })
 }
 
-/// The signed Firefox extension: shipped next to the app, or the newest one
+/// The signed Firefox extension: where the installer puts it (Linux:
+/// ~/.local/share/boost, Windows: next to boost.exe), or the newest one
 /// `scripts/sign-extension.sh` produced when running from the source tree.
 pub fn find_xpi(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
-    if let Some(p) = resource_dir.map(|d| d.join("extensions").join("raudo.xpi")).filter(|p| p.is_file()) {
+    let installed = [
+        dirs::data_dir().map(|d| d.join("boost").join("boost.xpi")),
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("boost.xpi"))),
+        resource_dir.map(|d| d.join("boost.xpi")),
+    ];
+    if let Some(p) = installed.into_iter().flatten().find(|p| p.is_file()) {
         return Some(p);
     }
     let artifacts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web-ext-artifacts");
