@@ -33,6 +33,9 @@ pub struct AddDownload {
     /// Exact file name instead of the one announced by the server.
     #[serde(default)]
     pub filename: Option<String>,
+    /// Name hint (page title): used for videos, and for files whose server name looks random.
+    #[serde(default)]
+    pub title: Option<String>,
     #[serde(default)]
     pub paused: bool,
     /// Download through yt-dlp (video pages, HLS/DASH manifests) instead of plain HTTP.
@@ -45,6 +48,9 @@ pub struct VideoOptions {
     /// yt-dlp format selector (`-f`), e.g. a format id from `Formats` or `bv*+ba/b`.
     #[serde(default)]
     pub format: Option<String>,
+    /// Keep only the audio track, converted to MP3 at this bitrate in kbit/s (0 = best VBR).
+    #[serde(default)]
+    pub audio_kbps: Option<u32>,
 }
 
 /// Result of `Formats`: what yt-dlp can offer for a page.

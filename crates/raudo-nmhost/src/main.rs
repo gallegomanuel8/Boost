@@ -24,6 +24,8 @@ enum Msg {
     },
     Download(DownloadMsg),
     Formats(PageMsg),
+    /// Downloads to show in the popup.
+    List,
 }
 
 #[derive(Deserialize)]
@@ -45,10 +47,16 @@ struct DownloadMsg {
     page: PageMsg,
     #[serde(default)]
     filename: Option<String>,
+    /// Page title, a name hint for random server names and stream playlists.
+    #[serde(default)]
+    title: Option<String>,
     #[serde(default)]
     video: bool,
     #[serde(default)]
     format: Option<String>,
+    /// MP3 bitrate in kbit/s: download the audio track only.
+    #[serde(default)]
+    audio_kbps: Option<u32>,
 }
 
 impl PageMsg {
@@ -109,12 +117,14 @@ impl Host {
                 Ok(json!({ "protocol": PROTOCOL, "daemon": daemon, "config": config() }))
             }
             Msg::Download(d) => {
+                let video = d.video || d.format.is_some() || d.audio_kbps.is_some();
                 let add = AddDownload {
                     request: d.page.request(),
                     dir: None,
                     filename: d.filename,
+                    title: d.title,
                     paused: false,
-                    video: (d.video || d.format.is_some()).then_some(VideoOptions { format: d.format }),
+                    video: video.then_some(VideoOptions { format: d.format, audio_kbps: d.audio_kbps }),
                 };
                 let body = serde_json::to_string(&add).expect("serializable");
                 let id = self
@@ -135,6 +145,15 @@ impl Host {
                     .await?;
                 let info: Value = serde_json::from_str(&info).map_err(|e| e.to_string())?;
                 Ok(json!({ "media": info }))
+            }
+            Msg::List => {
+                let list = self.call(|m| async move { m.list().await }).await?;
+                let mut list: Vec<Value> = serde_json::from_str(&list).map_err(|e| e.to_string())?;
+                // Newest first, unfinished on top; cap so the reply stays far below 1 MiB.
+                list.reverse();
+                list.sort_by_key(|d| d["status"] == "completed");
+                list.truncate(30);
+                Ok(json!({ "downloads": list }))
             }
         }
     }

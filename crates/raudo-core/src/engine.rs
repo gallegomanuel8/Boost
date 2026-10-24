@@ -60,6 +60,9 @@ pub struct Job {
     /// Where the partial file lives while downloading; `None` = next to the destination.
     /// The finished file is moved to the destination.
     pub temp_dir: Option<PathBuf>,
+    /// Name to use (plus the real extension) when the server's one looks random,
+    /// typically the title of the page the file came from.
+    pub title_hint: Option<String>,
 }
 
 #[derive(Debug)]
@@ -157,12 +160,22 @@ pub async fn run(
             (st, path, None)
         }
         _ => {
-            let (st, resp) = probe(client, &job.request.url, &headers).await?;
+            let (mut st, resp) = probe(client, &job.request.url, &headers).await?;
+            if let (Some(hint), Some(name)) = (job.title_hint.as_deref(), st.filename.as_deref()) {
+                if http::looks_random(name) {
+                    let ext = name.rsplit_once('.').filter(|_| http::has_extension(name)).map(|(_, e)| e);
+                    if let Some(clean) = http::sanitize(hint) {
+                        st.filename = Some(match ext {
+                            Some(e) => format!("{clean}.{e}"),
+                            None => clean,
+                        });
+                    }
+                }
+            }
             let path = match prior_name.map(|n| resolve_final(&job.dest, Some(&n))) {
                 Some(p) if !p.exists() => p,
                 _ => unique_path(resolve_final(&job.dest, st.filename.as_deref()), temp_dir),
             };
-            let mut st = st;
             st.filename = path.file_name().map(|n| n.to_string_lossy().into_owned());
             (st, path, Some(resp))
         }
@@ -330,9 +343,14 @@ async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<(State
     };
 
     let final_url = resp.url().to_string();
-    let filename = http::filename_from_disposition(rh)
+    let mut filename = http::filename_from_disposition(rh)
         .or_else(|| http::filename_from_url(&final_url))
         .unwrap_or_else(|| "download".into());
+    if !http::has_extension(&filename) {
+        if let Some(ext) = text(reqwest::header::CONTENT_TYPE).as_deref().and_then(http::ext_from_mime) {
+            filename = format!("{filename}.{ext}");
+        }
+    }
 
     let state = State {
         url: url.to_owned(),

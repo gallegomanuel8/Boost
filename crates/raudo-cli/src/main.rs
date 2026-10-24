@@ -38,6 +38,12 @@ enum Cmd {
         /// yt-dlp format selector (implies --video), see `formats`.
         #[arg(short, long)]
         format: Option<String>,
+        /// Keep only the audio, as MP3 at this bitrate in kbit/s (0 = best VBR).
+        #[arg(long, value_name = "KBPS")]
+        mp3: Option<u32>,
+        /// Name to use when the server's file name looks random.
+        #[arg(long)]
+        title: Option<String>,
     },
     /// Show the formats yt-dlp offers for a video page.
     Formats { url: String },
@@ -115,14 +121,16 @@ async fn daemon(cmd: Cmd) -> AnyResult {
     let mgr = ManagerProxy::new(&conn).await?;
     match cmd {
         Cmd::Get(_) => unreachable!(),
-        Cmd::Add { url, dir, output, paused, referer, cookies, video, format } => {
+        Cmd::Add { url, dir, output, paused, referer, cookies, video, format, mp3, title } => {
             let dir = dir.map(|d| std::path::absolute(d).map(|p| p.to_string_lossy().into_owned())).transpose()?;
             let add = AddDownload {
                 request: Request { url, referer, cookies, ..Default::default() },
                 dir,
                 filename: output,
+                title,
                 paused,
-                video: (video || format.is_some()).then_some(VideoOptions { format }),
+                video: (video || format.is_some() || mp3.is_some())
+                    .then_some(VideoOptions { format, audio_kbps: mp3 }),
             };
             let id = mgr.add(&serde_json::to_string(&add)?).await?;
             println!("{id}");
@@ -213,6 +221,7 @@ async fn get(args: GetArgs) -> AnyResult {
         },
         resume,
         temp_dir: None,
+        title_hint: None,
     };
     let opts = Options { max_connections: args.connections, ..Default::default() };
     let limiter = Arc::new(Limiter::new(args.limit.map(|k| k * 1024)));

@@ -83,6 +83,8 @@ impl Manager {
         if add.video.is_none() && is_manifest(&add.request.url) {
             add.video = Some(VideoOptions::default());
         }
+        // Names come from web pages: never let them carry a path.
+        add.filename = add.filename.as_deref().and_then(raudo_core::http::sanitize);
         let dir = match &add.dir {
             Some(d) => PathBuf::from(d),
             None => self.default_dir.clone(),
@@ -238,7 +240,10 @@ impl Manager {
             return self.start_video(id, stored, cancel_rx, discard);
         }
         let dir = PathBuf::from(&stored.dir);
+        // An explicit file name wins; otherwise the title only replaces random server names.
+        let title_hint = if stored.filename.is_none() { stored.title.clone() } else { None };
         let job = Job {
+            title_hint,
             request: stored.request,
             dest: match &stored.filename {
                 Some(name) => Dest::File(dir.join(name)),
@@ -268,6 +273,7 @@ impl Manager {
         tokio::spawn(async move {
             let dir = PathBuf::from(&stored.dir);
             let format = stored.video.as_ref().and_then(|v| v.format.clone());
+            let audio_kbps = stored.video.as_ref().and_then(|v| v.audio_kbps);
             let temp = this.temp_dir(id);
             let title = stored.title.as_deref().map(|t| video::unique_stem(&dir, t));
             let job = VideoJob {
@@ -276,6 +282,7 @@ impl Manager {
                 temp_dir: &temp,
                 title: title.as_deref(),
                 format: format.as_deref(),
+                audio_kbps,
                 rate_limit: this.limiter.rate(),
             };
             let mut last_save = Instant::now() - Duration::from_secs(1);

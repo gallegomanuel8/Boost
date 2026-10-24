@@ -22,6 +22,8 @@ pub struct VideoJob<'a> {
     /// File name without extension; `None` = yt-dlp's `title [id]`.
     pub title: Option<&'a str>,
     pub format: Option<&'a str>,
+    /// Extract the audio as MP3 at this bitrate (kbit/s, 0 = best VBR).
+    pub audio_kbps: Option<u32>,
     /// Bytes per second.
     pub rate_limit: Option<u64>,
 }
@@ -145,7 +147,18 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
     a.extend(["-P".into(), format!("home:{}", job.dir.display())]);
     a.extend(["-P".into(), format!("temp:{}", job.temp_dir.display())]);
     a.extend(js_runtime_args());
-    a.extend(["-f".into(), job.format.unwrap_or("bv*+ba/b").to_owned()]);
+    match job.audio_kbps {
+        Some(kbps) => {
+            // Audio-only stream when the site has one (YouTube, DASH). Muxed-only sites (most
+            // HLS) carry the same audio in every variant, so a ≤480p one avoids fetching
+            // gigabytes of video just to throw it away.
+            a.extend(["-f".into(), job.format.unwrap_or("ba/b[height<=480]/w").to_owned()]);
+            a.extend(["-x".into(), "--audio-format".into(), "mp3".into()]);
+            let quality = if kbps == 0 { "0".to_owned() } else { format!("{kbps}K") };
+            a.extend(["--audio-quality".into(), quality]);
+        }
+        None => a.extend(["-f".into(), job.format.unwrap_or("bv*+ba/b").to_owned()]),
+    }
     if let Some(r) = job.rate_limit {
         a.extend(["--limit-rate".into(), r.to_string()]);
     }
@@ -333,6 +346,7 @@ mod tests {
             temp_dir: Path::new("/tmp/t"),
             title: Some("100% real"),
             format: Some("22"),
+            audio_kbps: None,
             rate_limit: Some(1000),
         };
         let a = download_args(&job);
@@ -346,6 +360,11 @@ mod tests {
         assert!(has("--referer", "https://example.org/"));
         // URL after `--`, so a URL starting with '-' can never become an option.
         assert_eq!(&a[a.len() - 2..], ["--", "https://example.org/v"]);
+
+        let mp3 = VideoJob { format: None, audio_kbps: Some(192), ..job };
+        let a = download_args(&mp3);
+        let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
+        assert!(has("-f", "ba/b[height<=480]/w") && has("--audio-format", "mp3") && has("--audio-quality", "192K"));
     }
 
     #[test]

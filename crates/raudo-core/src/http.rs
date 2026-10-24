@@ -76,6 +76,69 @@ pub fn filename_from_url(url: &str) -> Option<String> {
     sanitize(&percent_decode_str(last).decode_utf8_lossy())
 }
 
+/// True for names that tell the user nothing: CDN ids (`jdq9qqo9ir1gjg.mp4`,
+/// `a3i6d2sua8~yCeMWVATGL`) or generic player names (`index.mp4`, `master.m3u8`).
+pub fn looks_random(name: &str) -> bool {
+    let stem = match name.rsplit_once('.') {
+        Some((s, ext)) if !s.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()) => s,
+        _ => name,
+    };
+    const GENERIC: [&str; 10] =
+        ["index", "master", "video", "videoplayback", "playlist", "file", "download", "stream", "media", "manifest"];
+    let lower = stem.to_ascii_lowercase();
+    if GENERIC.contains(&lower.as_str()) || lower.starts_with("index_") {
+        return true;
+    }
+    if stem.contains(' ') {
+        return false;
+    }
+    if stem.contains('~') {
+        return true;
+    }
+    let tokens = || stem.split(|c: char| !c.is_ascii_alphanumeric());
+    // A real word: 4+ letters and no digits.
+    let has_word = tokens().any(|t| t.len() >= 4 && t.chars().all(|c| c.is_ascii_alphabetic()));
+    // Ids interleave letters and digits; dates and counters (IMG_20240101) do not.
+    let has_id = tokens().any(|t| {
+        t.len() >= 6
+            && t.chars().filter(char::is_ascii_digit).count() >= 2
+            && t.chars().filter(char::is_ascii_alphabetic).count() >= 2
+    });
+    !has_word && has_id
+}
+
+/// File extension for a `Content-Type`, for servers that send names without one.
+pub fn ext_from_mime(mime: &str) -> Option<&'static str> {
+    let mime = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    Some(match mime.as_str() {
+        "video/mp4" | "video/x-m4v" => "mp4",
+        "video/webm" => "webm",
+        "video/x-matroska" => "mkv",
+        "video/quicktime" => "mov",
+        "video/x-msvideo" | "video/avi" => "avi",
+        "video/x-flv" => "flv",
+        "video/mp2t" => "ts",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "audio/webm" => "weba",
+        "audio/ogg" => "ogg",
+        "audio/flac" => "flac",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "application/zip" => "zip",
+        "application/pdf" => "pdf",
+        "application/x-7z-compressed" => "7z",
+        "application/vnd.rar" | "application/x-rar-compressed" => "rar",
+        "application/gzip" | "application/x-gzip" => "gz",
+        "application/x-iso9660-image" => "iso",
+        _ => return None,
+    })
+}
+
+pub fn has_extension(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(s, e)| !s.is_empty() && (1..=5).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
 /// Strips path separators and control characters; rejects names that would escape the folder.
 pub fn sanitize(name: &str) -> Option<String> {
     let cleaned: String = name
@@ -107,6 +170,32 @@ mod tests {
             HeaderValue::from_static("attachment; filename=x.zip; filename*=UTF-8''%C3%B1and%C3%BA.zip"),
         );
         assert_eq!(filename_from_disposition(&h).as_deref(), Some("ñandú.zip"));
+    }
+
+    #[test]
+    fn random_names() {
+        for n in ["jdq9qqo9ir1gjg.mp4", "a3i6d2sua8~yCeMWVATGL", "index.mp4", "master.m3u8", "index_1912x1072.mp4", "videoplayback"] {
+            assert!(looks_random(n), "{n} should look random");
+        }
+        for n in [
+            "Jack_and_Jill_Exotic-Beauty-Final.mp4",
+            "linux-6.19.tar.xz",
+            "My Holiday 2024.mp4",
+            "report.pdf",
+            "IMG_20240101_123456.jpg",
+            "ubuntu-24.04-desktop-amd64.iso",
+        ] {
+            assert!(!looks_random(n), "{n} should look meaningful");
+        }
+    }
+
+    #[test]
+    fn extensions() {
+        assert_eq!(ext_from_mime("video/mp4; codecs=avc1"), Some("mp4"));
+        assert_eq!(ext_from_mime("text/html"), None);
+        assert!(has_extension("a.mp4"));
+        assert!(!has_extension("a3i6d2sua8~yCeMWVATGL"));
+        assert!(!has_extension(".bashrc"));
     }
 
     #[test]

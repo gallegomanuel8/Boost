@@ -53,6 +53,8 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE downloads ADD COLUMN format TEXT;",
     // 2: requested name, kept apart from `filename`, which tracks what is on disk
     "ALTER TABLE downloads ADD COLUMN title TEXT;",
+    // 3: audio-only (MP3) downloads
+    "ALTER TABLE downloads ADD COLUMN audio_kbps INTEGER;",
 ];
 
 impl Db {
@@ -77,8 +79,8 @@ impl Db {
         let request = serde_json::to_string(&add.request).expect("serializable");
         let status = if add.paused { Status::Paused } else { Status::Queued };
         self.conn.execute(
-            "INSERT INTO downloads (url, request, dir, filename, fixed_name, status, video, format, title)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?4)",
+            "INSERT INTO downloads (url, request, dir, filename, fixed_name, status, video, format, title, audio_kbps)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 add.request.url,
                 request,
@@ -88,6 +90,8 @@ impl Db {
                 status.as_str(),
                 add.video.is_some(),
                 add.video.as_ref().and_then(|v| v.format.clone()),
+                add.title.as_ref().or(add.filename.as_ref()),
+                add.video.as_ref().and_then(|v| v.audio_kbps),
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -96,7 +100,8 @@ impl Db {
     pub fn stored(&self, id: i64) -> rusqlite::Result<Option<Stored>> {
         self.conn
             .query_row(
-                "SELECT request, dir, filename, fixed_name, state, video, format, title FROM downloads WHERE id = ?1",
+                "SELECT request, dir, filename, fixed_name, state, video, format, title, audio_kbps
+                 FROM downloads WHERE id = ?1",
                 [id],
                 |r| {
                     let request: String = r.get(0)?;
@@ -108,7 +113,10 @@ impl Db {
                         dir: r.get(1)?,
                         filename: if fixed { r.get(2)? } else { None },
                         state: state.and_then(|s| serde_json::from_str(&s).ok()),
-                        video: video.then(|| VideoOptions { format: r.get(6).ok().flatten() }),
+                        video: video.then(|| VideoOptions {
+                            format: r.get(6).ok().flatten(),
+                            audio_kbps: r.get(8).ok().flatten(),
+                        }),
                         title: r.get(7)?,
                     })
                 },

@@ -73,10 +73,13 @@ async function cookieHeader(url) {
   }
 }
 
-async function sendDownload({ url, referer = null, filename = null, video = false, format = null }) {
+async function sendDownload({
+  url, referer = null, filename = null, title = null, video = false, format = null, audioKbps = null,
+}) {
   const cookies = await cookieHeader(url);
   const r = await call({
-    type: "download", url, referer, cookies, userAgent: navigator.userAgent, filename, video, format,
+    type: "download", url, referer, cookies, userAgent: navigator.userAgent,
+    filename, title, video, format, audioKbps,
   });
   flashBadge();
   return r.downloadId;
@@ -267,7 +270,12 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "raudo-link") {
       await sendDownload({ url: info.linkUrl, referer: info.pageUrl });
     } else if (info.menuItemId === "raudo-media" && /^https?:/i.test(info.srcUrl || "")) {
-      await sendDownload({ url: info.srcUrl, referer: info.pageUrl, video: /\.(m3u8|mpd)(\?|$)/i.test(info.srcUrl) });
+      await sendDownload({
+        url: info.srcUrl,
+        referer: info.frameUrl || info.pageUrl,
+        title: tab?.title ?? null,
+        video: /\.(m3u8|mpd)(\?|$)/i.test(info.srcUrl),
+      });
     } else {
       // blob:/MediaSource players or the page itself: let yt-dlp resolve the page.
       await sendDownload({ url: info.pageUrl || tab?.url, video: true });
@@ -312,6 +320,9 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     }
     if (msg.type === "download") {
       return { downloadId: await sendDownload(msg.download) };
+    }
+    if (msg.type === "list") {
+      return (await call({ type: "list" })).downloads;
     }
     if (msg.type === "formats") {
       const cookies = await cookieHeader(msg.url);
