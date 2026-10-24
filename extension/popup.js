@@ -6,8 +6,11 @@ let tab = null;
 let state = null;
 
 // Promise form: Firefox's `browser.*` ignores callbacks; Chrome MV3 supports both.
-async function send(msg) {
-  const r = await api.runtime.sendMessage(msg);
+// Bounded, so a stuck background never leaves the popup waiting forever.
+async function send(msg, timeoutMs = 8000) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("la extensión no responde; recárgala en la página de extensiones")), timeoutMs));
+  const r = await Promise.race([api.runtime.sendMessage(msg), timeout]);
   if (!r?.ok) throw new Error(r?.error || "sin respuesta");
   return r.result;
 }
@@ -261,7 +264,7 @@ async function loadFormats() {
   $("page-formats").disabled = true;
   say("Consultando formatos (yt-dlp)…");
   try {
-    const info = await send({ type: "formats", url: tab.url });
+    const info = await send({ type: "formats", url: tab.url }, 90000);
     const sel = $("formats");
     sel.replaceChildren(el("option", { value: "bv*+ba/b", textContent: "Mejor calidad disponible" }));
     for (const f of [...info.formats].reverse()) {

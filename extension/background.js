@@ -220,11 +220,29 @@ api.webRequest.onHeadersReceived.addListener(
 );
 
 /** Media referenced by <video>/<audio> elements, so it shows up before playback starts. */
+const within = (ms, promise, fallback) =>
+  Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(fallback), ms))]);
+
+/**
+ * One injection per frame, each with its own deadline: `allFrames: true` waits for
+ * every frame, and ad iframes blocked by Brave Shields (or still loading) may never
+ * answer, which left the popup stuck on "conectando…".
+ */
 async function scanPage(tabId) {
-  if (!api.scripting) return [];
+  if (!api.scripting || !api.webNavigation) return [];
+  const frames = await within(1500, api.webNavigation.getAllFrames({ tabId }).catch(() => null), null);
+  if (!frames) return [];
+  const perFrame = frames
+    .filter((f) => /^https?:/i.test(f.url))
+    .slice(0, 20)
+    .map((f) => within(1500, scanFrame(tabId, f.frameId), []));
+  return (await Promise.all(perFrame)).flat();
+}
+
+async function scanFrame(tabId, frameId) {
   try {
     const results = await api.scripting.executeScript({
-      target: { tabId, allFrames: true },
+      target: { tabId, frameIds: [frameId] },
       func: () => {
         const urls = new Set();
         for (const el of document.querySelectorAll("video, audio, video source, audio source")) {
