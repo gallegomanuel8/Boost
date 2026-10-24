@@ -13,7 +13,7 @@
 //! writes, so there is no "rebuild" step at the end.
 
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::FileExt;
+use crate::fileio;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -324,7 +324,7 @@ pub async fn run(
     if !http::has_known_extension(&name) {
         // No usable extension from the server: tell the type from the content.
         let mut head = [0u8; 512];
-        let n = ctx.file.read_at(&mut head, 0)?;
+        let n = fileio::read_at(&ctx.file, &mut head, 0)?;
         if let Some(ext) = http::sniff_extension(&head[..n]) {
             // A short all-letter suffix the site invented ("x.vid") is replaced; anything
             // else (".Part2", a title's tail) is kept and the real extension appended.
@@ -596,7 +596,7 @@ async fn stream_body(ctx: &Ctx, idx: usize, resp: Response) -> Result<Exit, Stri
         if take > 0 {
             let file = ctx.file.clone();
             let data = chunk.slice(..take);
-            tokio::task::spawn_blocking(move || file.write_all_at(&data, pos))
+            tokio::task::spawn_blocking(move || fileio::write_all_at(&file, &data, pos))
                 .await
                 .expect("write task panicked")
                 .map_err(|e| e.to_string())?;

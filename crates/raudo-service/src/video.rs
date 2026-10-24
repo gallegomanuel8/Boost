@@ -1,6 +1,7 @@
 //! Video downloads through yt-dlp (sites, HLS/DASH manifests) and ffmpeg (merging).
 //!
-//! Pausing sends SIGINT; yt-dlp keeps its `.part` files and continues them on the next run.
+//! Pausing stops yt-dlp (SIGINT on Unix, termination on Windows); it keeps its
+//! `.part` files and continues them on the next run.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -43,37 +44,79 @@ pub enum VideoOutcome {
     Paused,
 }
 
-/// yt-dlp from PATH, falling back to `~/.local/bin` (not on PATH under D-Bus activation).
+/// Where helper programs (yt-dlp, ffmpeg, node) are looked for besides PATH:
+/// next to raudo itself (an installer can bundle them), raudo's own bin folder,
+/// and the per-user locations used on Linux.
+fn tool_dirs() -> Vec<PathBuf> {
+    let mut dirs_list = Vec::new();
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+        dirs_list.push(dir);
+    }
+    if let Some(d) = dirs::data_local_dir() {
+        dirs_list.push(d.join("raudo").join("bin"));
+    }
+    if let Some(h) = dirs::home_dir() {
+        dirs_list.push(h.join(".local/bin"));
+        dirs_list.push(h.join(".local/opt/node/bin"));
+    }
+    dirs_list
+}
+
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|d| d.join(&file))
+        .find(|p| p.is_file())
+}
+
+/// A helper program: PATH first, then [`tool_dirs`].
+pub fn find_tool(name: &str) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    find_in_path(name).or_else(|| tool_dirs().into_iter().map(|d| d.join(&file)).find(|p| p.is_file()))
+}
+
 pub fn ytdlp_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("RAUDO_YTDLP") {
         return p.into();
     }
-    find_in_path("yt-dlp")
-        .or_else(|| dirs::home_dir().map(|h| h.join(".local/bin/yt-dlp")).filter(|p| p.is_file()))
-        .unwrap_or_else(|| "yt-dlp".into())
+    find_tool("yt-dlp").unwrap_or_else(|| "yt-dlp".into())
 }
 
-fn find_in_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
+pub fn ffmpeg_bin() -> PathBuf {
+    find_tool("ffmpeg").unwrap_or_else(|| "ffmpeg".into())
+}
+
+/// A child process that opens no console window on Windows.
+fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// YouTube needs a JavaScript runtime to unlock most formats (without one only
 /// 144p survives). yt-dlp enables only deno by default; fall back to node.
 fn js_runtime_args() -> Vec<String> {
-    if find_in_path("deno").is_some() {
+    if find_tool("deno").is_some() {
         return Vec::new();
     }
-    let node = dirs::home_dir()
-        .map(|h| h.join(".local/opt/node/bin/node"))
-        .filter(|p| p.is_file())
-        .or_else(|| find_in_path("node"));
-    match node {
+    match find_tool("node") {
         Some(p) => vec!["--js-runtimes".into(), format!("node:{}", p.display())],
         None => Vec::new(),
+    }
+}
+
+/// yt-dlp finds ffmpeg on PATH; one bundled elsewhere must be pointed at.
+fn ffmpeg_location_args() -> Vec<String> {
+    match (find_in_path("ffmpeg"), find_tool("ffmpeg")) {
+        (None, Some(p)) => vec!["--ffmpeg-location".into(), p.display().to_string()],
+        _ => Vec::new(),
     }
 }
 
@@ -132,6 +175,7 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
     a.extend(["-P".into(), format!("home:{}", job.dir.display())]);
     a.extend(["-P".into(), format!("temp:{}", job.temp_dir.display())]);
     a.extend(js_runtime_args());
+    a.extend(ffmpeg_location_args());
     match job.audio_kbps {
         Some(kbps) => {
             // Audio-only stream when the site has one (YouTube, DASH). Muxed-only sites (most
@@ -191,7 +235,7 @@ pub async fn run(
     mut on_progress: impl FnMut(Progress),
     mut cancel: watch::Receiver<bool>,
 ) -> Result<VideoOutcome, String> {
-    let mut child = Command::new(ytdlp_bin())
+    let mut child = command(ytdlp_bin())
         .args(download_args(&job))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -230,7 +274,7 @@ pub async fn run(
             },
             _ = cancel.wait_for(|c| *c), if !paused => {
                 paused = true;
-                interrupt(&child);
+                interrupt(&mut child);
             }
         }
     }
@@ -278,7 +322,7 @@ pub async fn mux(tracks: &[PathBuf], out_dir: &Path, stem: &str, audio_kbps: Opt
     };
     args.push(out.to_string_lossy().into_owned());
 
-    let result = Command::new("ffmpeg").args(&args).stdin(Stdio::null()).kill_on_drop(true).output().await;
+    let result = command(ffmpeg_bin()).args(&args).stdin(Stdio::null()).kill_on_drop(true).output().await;
     match result {
         Ok(o) if o.status.success() => Ok(out),
         // Codecs MP4 cannot hold: keep the joined stream as it came.
@@ -307,7 +351,7 @@ pub async fn ytdlp_supports(url: &str) -> Option<bool> {
     if !head.starts_with(b"#!") {
         return None;
     }
-    let out = Command::new("python3")
+    let out = command("python3")
         .args(["-I", "-c", CHECK])
         .arg(&bin)
         .arg(url)
@@ -329,7 +373,8 @@ pub fn is_hls(url: &str) -> bool {
 }
 
 /// SIGINT lets yt-dlp close its part files cleanly (SIGKILL could leave ffmpeg output half-written).
-fn interrupt(child: &tokio::process::Child) {
+#[cfg(unix)]
+fn interrupt(child: &mut tokio::process::Child) {
     if let Some(pid) = child.id() {
         // SAFETY: plain syscall on a pid we own; worst case it targets an already-exited child.
         unsafe {
@@ -338,8 +383,15 @@ fn interrupt(child: &tokio::process::Child) {
     }
 }
 
+/// Windows has no SIGINT for a console-less child: terminate it. yt-dlp's part
+/// files survive and the next run continues them; a merge cut short is redone.
+#[cfg(windows)]
+fn interrupt(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+}
+
 pub async fn formats(req: &Request) -> Result<MediaInfo, String> {
-    let out = Command::new(ytdlp_bin())
+    let out = command(ytdlp_bin())
         .args(["-J", "--no-playlist", "--no-warnings"])
         .args(js_runtime_args())
         .args(context_args(req))
