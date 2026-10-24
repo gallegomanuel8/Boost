@@ -21,6 +21,10 @@ impl Limiter {
         self.inner.lock().unwrap().rate = rate;
     }
 
+    pub fn rate(&self) -> Option<u64> {
+        self.inner.lock().unwrap().rate
+    }
+
     /// Waits until `n` bytes may be consumed.
     pub async fn acquire(&self, n: usize) {
         let wait = {

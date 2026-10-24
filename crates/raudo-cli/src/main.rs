@@ -5,7 +5,7 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use raudo_core::{Dest, Event, Job, Limiter, Options, Outcome, Request, State};
-use raudo_proto::{AddDownload, DownloadInfo, ManagerProxy, Status};
+use raudo_proto::{AddDownload, DownloadInfo, ManagerProxy, MediaInfo, Status, VideoOptions};
 use tokio::sync::{mpsc, watch};
 
 #[derive(Parser)]
@@ -32,7 +32,15 @@ enum Cmd {
         referer: Option<String>,
         #[arg(long)]
         cookies: Option<String>,
+        /// Download with yt-dlp (video pages, HLS/DASH).
+        #[arg(long)]
+        video: bool,
+        /// yt-dlp format selector (implies --video), see `formats`.
+        #[arg(short, long)]
+        format: Option<String>,
     },
+    /// Show the formats yt-dlp offers for a video page.
+    Formats { url: String },
     /// List downloads.
     List,
     Pause { id: i64 },
@@ -107,16 +115,36 @@ async fn daemon(cmd: Cmd) -> AnyResult {
     let mgr = ManagerProxy::new(&conn).await?;
     match cmd {
         Cmd::Get(_) => unreachable!(),
-        Cmd::Add { url, dir, output, paused, referer, cookies } => {
+        Cmd::Add { url, dir, output, paused, referer, cookies, video, format } => {
             let dir = dir.map(|d| std::path::absolute(d).map(|p| p.to_string_lossy().into_owned())).transpose()?;
             let add = AddDownload {
                 request: Request { url, referer, cookies, ..Default::default() },
                 dir,
                 filename: output,
                 paused,
+                video: (video || format.is_some()).then_some(VideoOptions { format }),
             };
             let id = mgr.add(&serde_json::to_string(&add)?).await?;
             println!("{id}");
+        }
+        Cmd::Formats { url } => {
+            let req = Request { url, ..Default::default() };
+            let info: MediaInfo = serde_json::from_str(&mgr.formats(&serde_json::to_string(&req)?).await?)?;
+            println!("{}", info.title);
+            println!("{:<12} {:<5} {:<11} {:>5} {:<14} {:<12} {:>10}  NOTE", "ID", "EXT", "RESOLUTION", "FPS", "VIDEO", "AUDIO", "SIZE");
+            for f in &info.formats {
+                println!(
+                    "{:<12} {:<5} {:<11} {:>5} {:<14} {:<12} {:>10}  {}",
+                    f.id,
+                    f.ext,
+                    f.resolution.as_deref().unwrap_or("-"),
+                    f.fps.map(|v| format!("{v:.0}")).unwrap_or_default(),
+                    f.vcodec.as_deref().unwrap_or("-"),
+                    f.acodec.as_deref().unwrap_or("-"),
+                    f.filesize.map(human).unwrap_or_default(),
+                    f.note.as_deref().unwrap_or("")
+                );
+            }
         }
         Cmd::List => {
             let list: Vec<DownloadInfo> = serde_json::from_str(&mgr.list().await?)?;

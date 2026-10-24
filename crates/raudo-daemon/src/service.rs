@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use raudo_proto::AddDownload;
+use raudo_proto::{AddDownload, Request};
 use zbus::fdo;
 use zbus::object_server::SignalEmitter;
 
@@ -45,6 +45,13 @@ impl Service {
 
     fn set_max_concurrent(&self, n: u32) -> fdo::Result<()> {
         self.manager.set_max_concurrent(n).map_err(failed)
+    }
+
+    async fn formats(&self, request: &str) -> fdo::Result<String> {
+        let request: Request =
+            serde_json::from_str(request).map_err(|e| fdo::Error::InvalidArgs(format!("bad request JSON: {e}")))?;
+        let info = self.manager.formats(&request).await.map_err(failed)?;
+        Ok(serde_json::to_string(&info).expect("serializable"))
     }
 
     #[zbus(signal)]

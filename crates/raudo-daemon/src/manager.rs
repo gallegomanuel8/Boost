@@ -5,11 +5,27 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use raudo_core::{Dest, Error as EngineError, Event, Job, Limiter, Options, Outcome};
-use raudo_proto::{AddDownload, DownloadInfo, Status};
+use raudo_proto::{AddDownload, DownloadInfo, MediaInfo, Request, Status, VideoOptions};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
-use crate::db::Db;
+use crate::db::{Db, Stored};
+use crate::video::{self, VideoJob, VideoOutcome};
+
+/// How a download task ended, whatever did the work (engine or yt-dlp).
+enum Finished {
+    Completed(PathBuf),
+    Paused,
+    /// Start again from zero (remote file changed).
+    Restart,
+    Failed(String),
+}
+
+/// HLS/DASH manifests need yt-dlp even when added as plain links.
+fn is_manifest(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    path.ends_with(".m3u8") || path.ends_with(".mpd")
+}
 
 /// Notifications for D-Bus clients.
 pub enum Notify {
@@ -57,9 +73,12 @@ impl Manager {
         })
     }
 
-    pub fn add(self: &Arc<Self>, add: AddDownload) -> Result<i64> {
+    pub fn add(self: &Arc<Self>, mut add: AddDownload) -> Result<i64> {
         if !(add.request.url.starts_with("http://") || add.request.url.starts_with("https://")) {
             return Err("only http and https URLs are supported".into());
+        }
+        if add.video.is_none() && is_manifest(&add.request.url) {
+            add.video = Some(VideoOptions::default());
         }
         let dir = match &add.dir {
             Some(d) => PathBuf::from(d),
@@ -134,6 +153,10 @@ impl Manager {
         Ok(())
     }
 
+    pub async fn formats(&self, request: &Request) -> Result<MediaInfo> {
+        video::formats(request).await
+    }
+
     pub fn set_speed_limit(&self, kib: u64) {
         self.limiter.set_rate((kib > 0).then_some(kib * 1024));
     }
@@ -190,6 +213,9 @@ impl Manager {
         );
         self.changed(id);
 
+        if stored.video.is_some() {
+            return self.start_video(id, stored, cancel_rx, discard);
+        }
         let dir = PathBuf::from(&stored.dir);
         let job = Job {
             request: stored.request,
@@ -205,7 +231,57 @@ impl Manager {
             let events = tokio::spawn(this.clone().consume_events(id, rx));
             let outcome = raudo_core::run(&this.client, job, &this.opts, this.limiter.clone(), tx, cancel_rx).await;
             let last_state = events.await.ok().flatten();
-            this.finish(id, outcome, discard.load(Ordering::SeqCst), &dir, last_state);
+            if discard.load(Ordering::SeqCst) {
+                if let Some(name) = last_state.and_then(|s| s.filename) {
+                    let _ = std::fs::remove_file(raudo_core::part_path(&dir.join(name)));
+                }
+            }
+            let finished = match outcome {
+                Ok(Outcome::Completed { path, .. }) => Finished::Completed(path),
+                Ok(Outcome::Paused(_)) => Finished::Paused,
+                Err(EngineError::RemoteChanged) => Finished::Restart,
+                Err(e) => Finished::Failed(e.to_string()),
+            };
+            this.finish(id, finished, discard.load(Ordering::SeqCst));
+        });
+    }
+
+    fn start_video(self: &Arc<Self>, id: i64, stored: Stored, cancel: watch::Receiver<bool>, discard: Arc<AtomicBool>) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            let dir = PathBuf::from(&stored.dir);
+            let format = stored.video.as_ref().and_then(|v| v.format.clone());
+            let job = VideoJob {
+                request: &stored.request,
+                dir: &dir,
+                format: format.as_deref(),
+                rate_limit: this.limiter.rate(),
+            };
+            let mut last_save = Instant::now() - Duration::from_secs(1);
+            let on_progress = |p: video::Progress| {
+                if let Some(r) = this.running.lock().unwrap().get_mut(&id) {
+                    r.speed = p.speed;
+                    r.connections = 1;
+                }
+                if last_save.elapsed() >= Duration::from_millis(500) {
+                    let db = this.db.lock().unwrap();
+                    let saved = db
+                        .save_progress(id, p.downloaded, p.total)
+                        .and_then(|_| p.file.as_deref().map_or(Ok(()), |f| db.set_filename(id, f)));
+                    drop(db);
+                    if let Err(e) = saved {
+                        warn!(id, "save progress: {e}");
+                    }
+                    this.changed(id);
+                    last_save = Instant::now();
+                }
+            };
+            let finished = match video::run(job, on_progress, cancel).await {
+                Ok(VideoOutcome::Completed(path)) => Finished::Completed(path),
+                Ok(VideoOutcome::Paused) => Finished::Paused,
+                Err(e) => Finished::Failed(e),
+            };
+            this.finish(id, finished, discard.load(Ordering::SeqCst));
         });
     }
 
@@ -238,39 +314,33 @@ impl Manager {
         last_state
     }
 
-    fn finish(
-        self: &Arc<Self>,
-        id: i64,
-        outcome: std::result::Result<Outcome, EngineError>,
-        discard: bool,
-        dir: &std::path::Path,
-        last_state: Option<raudo_core::State>,
-    ) {
+    fn finish(self: &Arc<Self>, id: i64, finished: Finished, discard: bool) {
         self.running.lock().unwrap().remove(&id);
         if discard {
-            if let Some(name) = last_state.and_then(|s| s.filename) {
-                let _ = std::fs::remove_file(raudo_core::part_path(&dir.join(name)));
-            }
+            // Row already deleted by `remove`.
             self.schedule();
             return;
         }
         let db = self.db.lock().unwrap();
-        let result = match outcome {
-            Ok(Outcome::Completed { path, .. }) => {
+        let result = match finished {
+            Finished::Completed(path) => {
                 info!(id, path = %path.display(), "completed");
-                db.set_status(id, Status::Completed, None)
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                // Real size on disk: yt-dlp totals are often estimates.
+                let len = std::fs::metadata(&path).map(|m| m.len()).ok();
+                name.map_or(Ok(()), |n| db.set_filename(id, &n))
+                    .and_then(|_| len.map_or(Ok(()), |l| db.save_progress(id, l, Some(l))))
+                    .and_then(|_| db.set_status(id, Status::Completed, None))
             }
-            Ok(Outcome::Paused(_)) if self.shutting_down.load(Ordering::SeqCst) => {
-                db.set_status(id, Status::Queued, None)
-            }
-            Ok(Outcome::Paused(_)) => db.set_status(id, Status::Paused, None),
-            Err(EngineError::RemoteChanged) => {
+            Finished::Paused if self.shutting_down.load(Ordering::SeqCst) => db.set_status(id, Status::Queued, None),
+            Finished::Paused => db.set_status(id, Status::Paused, None),
+            Finished::Restart => {
                 warn!(id, "remote file changed, restarting from scratch");
                 db.clear_state(id).and_then(|_| db.set_status(id, Status::Queued, None))
             }
-            Err(e) => {
+            Finished::Failed(e) => {
                 warn!(id, "failed: {e}");
-                db.set_status(id, Status::Error, Some(&e.to_string()))
+                db.set_status(id, Status::Error, Some(&e))
             }
         };
         drop(db);

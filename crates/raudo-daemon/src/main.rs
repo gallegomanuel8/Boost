@@ -1,6 +1,7 @@
 mod db;
 mod manager;
 mod service;
+mod video;
 
 use std::path::PathBuf;
 

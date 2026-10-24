@@ -35,6 +35,42 @@ pub struct AddDownload {
     pub filename: Option<String>,
     #[serde(default)]
     pub paused: bool,
+    /// Download through yt-dlp (video pages, HLS/DASH manifests) instead of plain HTTP.
+    #[serde(default)]
+    pub video: Option<VideoOptions>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VideoOptions {
+    /// yt-dlp format selector (`-f`), e.g. a format id from `Formats` or `bv*+ba/b`.
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
+/// Result of `Formats`: what yt-dlp can offer for a page.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MediaInfo {
+    pub title: String,
+    pub duration: Option<f64>,
+    pub thumbnail: Option<String>,
+    pub formats: Vec<MediaFormat>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MediaFormat {
+    pub id: String,
+    pub ext: String,
+    pub resolution: Option<String>,
+    pub fps: Option<f64>,
+    /// `None` when the format carries no video (audio only).
+    pub vcodec: Option<String>,
+    /// `None` when the format carries no audio (video only).
+    pub acodec: Option<String>,
+    /// Exact or estimated size in bytes.
+    pub filesize: Option<u64>,
+    /// Total bitrate in kbit/s.
+    pub tbr: Option<f64>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +120,7 @@ pub struct DownloadInfo {
     pub connections: usize,
     pub error: Option<String>,
     pub queue: i64,
+    pub video: bool,
 }
 
 #[zbus::proxy(interface = "org.raudo.Manager1", default_service = "org.raudo.Manager", default_path = "/org/raudo/Manager")]
@@ -99,6 +136,8 @@ pub trait Manager {
     /// KiB/s, 0 = unlimited.
     fn set_speed_limit(&self, kib_per_sec: u64) -> zbus::Result<()>;
     fn set_max_concurrent(&self, n: u32) -> zbus::Result<()>;
+    /// `request`: JSON `Request` of a video page. Returns JSON `MediaInfo`.
+    fn formats(&self, request: &str) -> zbus::Result<String>;
 
     /// JSON `DownloadInfo`, emitted on every state change and periodically while downloading.
     #[zbus(signal)]
