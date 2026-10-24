@@ -1,0 +1,22 @@
+[package]
+name = "raudo-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "raudo-daemon"
+path = "src/main.rs"
+
+[dependencies]
+raudo-proto.workspace = true
+raudo-core.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+zbus.workspace = true
+rusqlite.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

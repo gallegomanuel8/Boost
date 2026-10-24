@@ -1,18 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// What to fetch and with which browser context (cookies, referer, UA).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Request {
-    pub url: String,
-    #[serde(default)]
-    pub headers: Vec<(String, String)>,
-    #[serde(default)]
-    pub cookies: Option<String>,
-    #[serde(default)]
-    pub referer: Option<String>,
-    #[serde(default)]
-    pub user_agent: Option<String>,
-}
+pub use raudo_proto::Request;
 
 /// Byte range `[start, end)` owned by at most one connection.
 /// `done` bytes from `start` are already on disk.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/raudo-core", "crates/raudo-cli"]
+members = ["crates/raudo-proto", "crates/raudo-core", "crates/raudo-daemon", "crates/raudo-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,3 +19,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 percent-encoding = "2"
 url = "2"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+raudo-proto = { path = "crates/raudo-proto" }
+raudo-core = { path = "crates/raudo-core" }

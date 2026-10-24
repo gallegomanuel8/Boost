@@ -224,6 +224,9 @@ pub async fn run(
             last_progress = Instant::now();
         }
         if last_snapshot.elapsed() >= Duration::from_secs(1) {
+            // Data first, then the state that claims it: a crash never over-reports progress.
+            let f = ctx.file.clone();
+            tokio::task::spawn_blocking(move || f.sync_data()).await.expect("sync task panicked")?;
             emit(Event::Snapshot(state.clone()));
             last_snapshot = Instant::now();
         }

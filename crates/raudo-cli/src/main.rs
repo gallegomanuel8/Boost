@@ -2,14 +2,57 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use futures_util::StreamExt;
 use raudo_core::{Dest, Event, Job, Limiter, Options, Outcome, Request, State};
+use raudo_proto::{AddDownload, DownloadInfo, ManagerProxy, Status};
 use tokio::sync::{mpsc, watch};
 
-/// Test front end for the raudo engine. Ctrl-C pauses; run again to resume.
 #[derive(Parser)]
-#[command(version)]
-struct Args {
+#[command(version, about = "raudo download manager")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Download directly, without the daemon. Ctrl-C pauses; run again to resume.
+    Get(GetArgs),
+    /// Queue a download in the daemon.
+    Add {
+        url: String,
+        #[arg(short, long)]
+        dir: Option<PathBuf>,
+        #[arg(short, long)]
+        output: Option<String>,
+        #[arg(long)]
+        paused: bool,
+        #[arg(long)]
+        referer: Option<String>,
+        #[arg(long)]
+        cookies: Option<String>,
+    },
+    /// List downloads.
+    List,
+    Pause { id: i64 },
+    Resume { id: i64 },
+    /// Remove from the list (and the file with --delete).
+    Rm {
+        id: i64,
+        #[arg(long)]
+        delete: bool,
+    },
+    /// Global speed limit in KiB/s (0 = unlimited).
+    Limit { kib: u64 },
+    /// Parallel downloads in the main queue.
+    Concurrent { n: u32 },
+    /// Follow progress until interrupted.
+    Watch,
+}
+
+#[derive(clap::Args)]
+struct GetArgs {
     url: String,
     /// Output directory (name from the server) or, with --output, exact file.
     #[arg(short, long, default_value = ".")]
@@ -44,8 +87,11 @@ async fn main() -> std::process::ExitCode {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
-    let args = Args::parse();
-    match run(args).await {
+    let result = match Cli::parse().cmd {
+        Cmd::Get(args) => get(args).await,
+        cmd => daemon(cmd).await,
+    };
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("\nerror: {e}");
@@ -54,7 +100,67 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
-async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+type AnyResult = Result<(), Box<dyn std::error::Error>>;
+
+async fn daemon(cmd: Cmd) -> AnyResult {
+    let conn = zbus::Connection::session().await?;
+    let mgr = ManagerProxy::new(&conn).await?;
+    match cmd {
+        Cmd::Get(_) => unreachable!(),
+        Cmd::Add { url, dir, output, paused, referer, cookies } => {
+            let dir = dir.map(|d| std::path::absolute(d).map(|p| p.to_string_lossy().into_owned())).transpose()?;
+            let add = AddDownload {
+                request: Request { url, referer, cookies, ..Default::default() },
+                dir,
+                filename: output,
+                paused,
+            };
+            let id = mgr.add(&serde_json::to_string(&add)?).await?;
+            println!("{id}");
+        }
+        Cmd::List => {
+            let list: Vec<DownloadInfo> = serde_json::from_str(&mgr.list().await?)?;
+            println!("{:>4}  {:<11}  {:>6}  {:>10}  {:>11}  NAME", "ID", "STATUS", "%", "SIZE", "SPEED");
+            for d in &list {
+                print_row(d);
+            }
+        }
+        Cmd::Pause { id } => mgr.pause(id).await?,
+        Cmd::Resume { id } => mgr.resume(id).await?,
+        Cmd::Rm { id, delete } => mgr.remove(id, delete).await?,
+        Cmd::Limit { kib } => mgr.set_speed_limit(kib).await?,
+        Cmd::Concurrent { n } => mgr.set_max_concurrent(n).await?,
+        Cmd::Watch => {
+            let mut changes = mgr.receive_changed().await?;
+            while let Some(sig) = changes.next().await {
+                if let Ok(d) = serde_json::from_str::<DownloadInfo>(&sig.args()?.info) {
+                    print_row(&d);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_row(d: &DownloadInfo) {
+    let pct = d.size.map(|s| format!("{:.1}", d.downloaded as f64 * 100.0 / s.max(1) as f64)).unwrap_or("-".into());
+    let speed = if d.status == Status::Downloading { format!("{}/s", human(d.speed as u64)) } else { String::new() };
+    let mut name = d.filename.clone().unwrap_or_else(|| d.url.clone());
+    if let Some(e) = &d.error {
+        name.push_str(&format!("  [{e}]"));
+    }
+    println!(
+        "{:>4}  {:<11}  {:>6}  {:>10}  {:>11}  {}",
+        d.id,
+        d.status.as_str(),
+        pct,
+        d.size.map(human).unwrap_or("?".into()),
+        speed,
+        name
+    );
+}
+
+async fn get(args: GetArgs) -> AnyResult {
     let dir = match &args.output {
         Some(p) => p.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf(),
         None => args.dir.clone(),
