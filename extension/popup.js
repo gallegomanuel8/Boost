@@ -1,6 +1,5 @@
 const api = globalThis.browser ?? globalThis.chrome;
 const $ = (id) => document.getElementById(id);
-const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|mov|avi|flv|ts)(\?|$)/i;
 
 let tab = null;
 let state = null;
@@ -117,20 +116,39 @@ async function refreshDownloads() {
 const MIME_TYPE = {
   "video/mp4": "MP4", "video/webm": "WEBM", "video/x-matroska": "MKV", "video/quicktime": "MOV",
   "video/x-flv": "FLV", "video/mp2t": "TS", "audio/mpeg": "MP3", "audio/mp4": "M4A", "audio/ogg": "OGG",
+  "audio/flac": "FLAC", "audio/wav": "WAV", "audio/webm": "WEBA", "audio/aac": "AAC",
 };
-/** HLS/DASH details from the daemon, by playlist URL. */
-const streamInfo = new Map();
+const AUDIO_EXT = /^(MP3|M4A|OGG|OPUS|FLAC|WAV|WEBA|AAC)$/;
 
 const bare = (u) => u.split(/[?#]/)[0];
 
-function isVideo(m) {
-  return m.kind !== "file" || (m.mime || "").startsWith("video/") || VIDEO_EXT.test(m.url);
+/**
+ * File type the way IDM shows it ("MP4", "WEBM"...). The server's MIME type wins
+ * over the URL: sites use made-up extensions (".vid") for plain MP4 files.
+ */
+function fileType(m) {
+  if (MIME_TYPE[m.mime]) return MIME_TYPE[m.mime];
+  const ext = /\.([a-z0-9]{2,5})$/i.exec(bare(m.url))?.[1]?.toUpperCase();
+  return ext && /^(MP4|M4V|MKV|WEBM|MOV|AVI|FLV|TS|WMV|3GP)$/.test(ext) || AUDIO_EXT.test(ext ?? "") ? ext : "MP4";
 }
 
-/** File type the way IDM shows it: "MP4", "WEBM", "TS"... */
-function fileType(m) {
-  const ext = /\.([a-z0-9]{2,5})$/i.exec(bare(m.url))?.[1];
-  return (ext && ext.toUpperCase() !== "PHP" ? ext.toUpperCase() : null) ?? MIME_TYPE[m.mime] ?? "VÍDEO";
+const isAudio = (m) => m.kind === "file" && ((m.mime || "").startsWith("audio/") || AUDIO_EXT.test(fileType(m)));
+
+/** CDN ids (jdq9qqo9ir1gjg.mp4) and player names (index.m3u8) say nothing; same rule as the daemon. */
+function looksRandom(name) {
+  const stem = name.replace(/\.[a-z0-9]{1,5}$/i, "");
+  if (/^(index|master|video|videoplayback|playlist|file|download|stream|media|manifest)$/i.test(stem)) return true;
+  if (/^index_/i.test(stem) || stem.includes(" ")) return /^index_/i.test(stem);
+  if (stem.includes("~")) return true;
+  const tokens = stem.split(/[^a-z0-9]/i);
+  const hasWord = tokens.some((t) => t.length >= 4 && /^[a-z]+$/i.test(t));
+  const hasId = tokens.some((t) => t.length >= 6 && (t.match(/\d/g) || []).length >= 2 && (t.match(/[a-z]/gi) || []).length >= 2);
+  return !hasWord && hasId;
+}
+
+function displayName(m) {
+  const name = shortName(m.url);
+  return (m.kind !== "file" || looksRandom(name)) && state?.pageTitle ? state.pageTitle : name;
 }
 
 function duration(secs) {
@@ -141,7 +159,7 @@ function duration(secs) {
 
 function describe(m) {
   if (m.kind === "file") return [fileType(m), human(m.size)].filter(Boolean).join(" · ");
-  const info = streamInfo.get(m.url);
+  const info = m.info;
   const kind = m.kind.toUpperCase();
   if (info === undefined) return `${kind} · comprobando…`;
   if (info === null) return `${kind} · no se pudo leer la lista; se intentará al descargar`;
@@ -154,21 +172,9 @@ function describe(m) {
   ].filter(Boolean).join(" · ");
 }
 
-/** Hides variant playlists of a listed master and repeated URLs (same path, new token). */
-function visibleMedia(list) {
-  const variants = new Set();
-  for (const info of streamInfo.values()) for (const v of info?.variants ?? []) variants.add(bare(v));
-  const seen = new Set();
-  return list.filter((m) => {
-    const key = bare(m.url);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return !(m.kind === "hls" && variants.has(key) && !streamInfo.get(m.url)?.master);
-  });
-}
-
-function renderMedia(all) {
-  const list = visibleMedia(all);
+// The background decides what is listed (duplicates, variants, previews), so the
+// popup shows exactly what the badge counts.
+function renderMedia(list) {
   $("media-empty").hidden = list.length > 0;
   $("media-empty").textContent = state?.videoSite
     ? "En esta web el vídeo llega en fragmentos: usa los botones de arriba."
@@ -185,41 +191,42 @@ function renderMedia(all) {
         // Lets the daemon fetch a fresh link if this one is bound to the browser's IP (VPN).
         page: tab?.url ?? null,
       };
-      const info = streamInfo.get(m.url);
       // Only a confirmed live stream is unusable. A failed inspection is not: the
       // daemon can still fetch a fresh link from the page when downloading.
-      const usable = !info?.live;
-      const get = el("button", { textContent: "Descargar", className: "primary", disabled: !usable });
+      const usable = !m.info?.live;
+      // The button names what lands on disk: streams become MP4, files keep their type.
+      const type = stream ? "MP4" : fileType(m);
+      const get = el("button", {
+        textContent: type, className: "primary", disabled: !usable, title: `Descargar como ${type}`,
+      });
       get.onclick = () => download({ ...base, video: stream }, get);
       const line = el("div", { className: "line" },
-        el("span", {
-          className: "name",
-          // A playlist file name (index.m3u8) says nothing; the page title does.
-          textContent: stream && state?.pageTitle ? state.pageTitle : shortName(m.url),
-          title: m.url,
-        }),
+        el("span", { className: "name", textContent: displayName(m), title: m.url }),
         get,
       );
-      if (isVideo(m)) {
+      if (!isAudio(m)) {
         const mp3 = el("button", { textContent: "MP3", title: "Descargar solo el audio en MP3", disabled: !usable });
         mp3.onclick = () => download({ ...base, video: true, audioKbps: mp3Kbps() }, mp3);
         line.append(mp3);
       }
-      const meta = describe(m) + (info?.live ? " · directo (no soportado)" : "");
+      const meta = describe(m) + (m.info?.live ? " · directo (no soportado)" : "");
       return el("li", {}, line, el("div", { className: "meta", textContent: meta, title: m.url }));
     }),
   );
 }
 
-/** Asks the daemon about each stream once; re-renders as answers arrive. */
-function inspectStreams(list) {
-  for (const m of list) {
-    if (m.kind !== "hls" || streamInfo.has(m.url)) continue;
-    streamInfo.set(m.url, undefined);
-    send({ type: "inspect", target: "hls", url: m.url, referer: "referer" in m ? m.referer : tab?.url })
-      .then((info) => streamInfo.set(m.url, info), () => streamInfo.set(m.url, null))
-      .then(() => renderMedia(state.media || []));
-  }
+/** Streams still being inspected by the background: refresh the list until they are done. */
+let mediaTimer = null;
+function followInspections(list) {
+  clearTimeout(mediaTimer);
+  if (!list.some((m) => m.kind === "hls" && m.info === undefined)) return;
+  mediaTimer = setTimeout(async () => {
+    try {
+      state.media = await send({ type: "media", tabId: tab?.id });
+      renderMedia(state.media);
+      followInspections(state.media);
+    } catch { /* popup closing */ }
+  }, 1000);
 }
 
 // ------------------------------------------------------------- page support
@@ -308,7 +315,7 @@ async function refresh() {
     for (const b of PAGE_BUTTONS) $(b).disabled = true;
     return;
   }
-  inspectStreams(state.media || []);
+  followInspections(state.media || []);
   if (web) checkPage();
   refreshDownloads();
 }

@@ -163,7 +163,8 @@ pub async fn run(
             let (mut st, resp) = probe(client, &job.request.url, &headers).await?;
             if let (Some(hint), Some(name)) = (job.title_hint.as_deref(), st.filename.as_deref()) {
                 if http::looks_random(name) {
-                    let ext = name.rsplit_once('.').filter(|_| http::has_extension(name)).map(|(_, e)| e);
+                    // Made-up extensions (".vid") are dropped; the content decides at the end.
+                    let ext = name.rsplit_once('.').filter(|_| http::has_known_extension(name)).map(|(_, e)| e);
                     if let Some(clean) = http::sanitize(hint) {
                         st.filename = Some(match ext {
                             Some(e) => format!("{clean}.{e}"),
@@ -323,7 +324,13 @@ pub async fn run(
         let mut head = [0u8; 512];
         let n = ctx.file.read_at(&mut head, 0)?;
         if let Some(ext) = http::sniff_extension(&head[..n]) {
-            final_path = final_path.with_file_name(format!("{name}.{ext}"));
+            // A short all-letter suffix the site invented ("x.vid") is replaced; anything
+            // else (".Part2", a title's tail) is kept and the real extension appended.
+            let stem = match name.rsplit_once('.') {
+                Some((s, e)) if !s.is_empty() && (1..=4).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphabetic()) => s,
+                _ => name.as_str(),
+            };
+            final_path = final_path.with_file_name(format!("{stem}.{ext}"));
         }
     }
     // Another download may have finished under the same name since this one started.

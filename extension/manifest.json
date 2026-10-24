@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "raudo",
   "description": "Envía descargas y vídeos al gestor de descargas raudo.",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtC59WWF53YGWKlTIfDqXkNGNBG2cRDhQiVdLFbQr8YWp4S1JU99/C4Dx/khY2bvEtlQ+Z/WWGrYVz3hqTYZkR+hyjJClC37x+5ZZLBhGNDWO4G3ml8+LGaMBI3mZkbcuCTDnDfetXZ4rSO7YDPt039CnxCjkxE4FYtqi2kbZcIlrc1GawcMgrsf1Ie94yWhI5ozFDPfW2sl1fSAFiMFNf8r9AT1+6YCZF4DMd0mJ/1rj7w30oaVSI5nAerBuRiUuGMaP77EC5x/mSDdCqQOAIaAoa768xyEpifssy54Twwm29xmtKTjPeRtXiD8Ot4Vh02I+owqEDDRJtCOAeT3MXQIDAQAB",
   "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
   "action": { "default_popup": "popup.html", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },

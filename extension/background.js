@@ -198,11 +198,50 @@ api.webRequest.onBeforeSendHeaders.addListener(
   IS_FIREFOX ? ["requestHeaders"] : ["requestHeaders", "extraHeaders"],
 );
 
+/**
+ * First URL of each redirected request: players often point <video> at an address
+ * like streamtape's /get_video?... that redirects to the real file. Both name the
+ * same video.
+ */
+const redirectedFrom = new Map();
+
+api.webRequest.onBeforeRedirect.addListener(
+  (d) => {
+    if (d.tabId < 0) return;
+    if (!redirectedFrom.has(d.requestId)) redirectedFrom.set(d.requestId, d.url.split("#")[0]);
+    if (redirectedFrom.size > 500) redirectedFrom.delete(redirectedFrom.keys().next().value);
+  },
+  { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "object", "other"] },
+);
+
+function saveTab(tabId, list) {
+  media.set(tabId, list);
+  api.storage.session?.set({ [mediaKey(tabId)]: list });
+  updateBadge(tabId);
+}
+
+/** Asks the daemon what a playlist contains: quality, duration, its variants. */
+async function inspectStream(tabId, item) {
+  try {
+    const cookies = await cookieHeader(item.url);
+    const r = await call({
+      type: "inspect", target: "hls", url: item.url, referer: item.referer, cookies, userAgent: navigator.userAgent,
+    });
+    item.info = r.info;
+  } catch {
+    item.info = null; // unreadable here; the download can still re-resolve it
+  }
+  const list = media.get(tabId);
+  if (list?.includes(item)) saveTab(tabId, list);
+}
+
 api.webRequest.onHeadersReceived.addListener(
   (d) => {
     if (d.tabId < 0) return;
     const sent = sentReferer.get(d.requestId);
     sentReferer.delete(d.requestId);
+    const origin = redirectedFrom.get(d.requestId);
+    redirectedFrom.delete(d.requestId);
     const found = classify(d);
     if (!found) return;
     const list = media.get(d.tabId) ?? [];
@@ -210,14 +249,38 @@ api.webRequest.onHeadersReceived.addListener(
     if (list.some((m) => m.url === bare)) return;
     // null = the browser sent no Referer, and the server accepted that.
     const referer = sent !== undefined ? sent : (d.documentUrl ?? d.initiator ?? null);
-    list.push({ url: bare, ...found, referer });
-    media.set(d.tabId, list);
-    api.storage.session?.set({ [mediaKey(d.tabId)]: list });
-    updateBadge(d.tabId);
+    const item = { url: bare, ...found, referer, aliases: origin && origin !== bare ? [origin] : [] };
+    // A <video> found by the page scan that turns out to redirect here is the same video.
+    saveTab(d.tabId, list.filter((m) => !(m.fromPage && item.aliases.includes(m.url))).concat(item));
+    if (item.kind === "hls") inspectStream(d.tabId, item);
   },
   { urls: ["<all_urls>"] },
   ["responseHeaders"],
 );
+
+const bareUrl = (u) => u.split(/[?#]/)[0];
+const baseName = (u) => decodeURIComponent(bareUrl(u).split("/").pop() || "");
+
+/**
+ * What the badge counts and the popup lists:
+ * - variant playlists of a master that is listed are hidden (the master downloads the best one);
+ * - the same file from several servers or with a new token counts once (name + size, or path);
+ * - page-scan entries that are another name of a detected request are dropped.
+ */
+function visibleMedia(list) {
+  const variants = new Set();
+  for (const m of list) for (const v of m.info?.variants ?? []) variants.add(bareUrl(v));
+  const aliases = new Set(list.flatMap((m) => m.aliases ?? []));
+  const seen = new Set();
+  return list.filter((m) => {
+    if (m.kind === "hls" && variants.has(bareUrl(m.url)) && !m.info?.master) return false;
+    if (m.fromPage && aliases.has(m.url)) return false;
+    const key = m.size ? `${baseName(m.url)}|${m.size}` : bareUrl(m.url);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 /** Media referenced by <video>/<audio> elements, so it shows up before playback starts. */
 const within = (ms, promise, fallback) =>
@@ -245,11 +308,21 @@ async function scanFrame(tabId, frameId) {
       target: { tabId, frameIds: [frameId] },
       func: () => {
         const urls = new Set();
-        for (const el of document.querySelectorAll("video, audio, video source, audio source")) {
-          for (const u of [el.currentSrc, el.getAttribute("src")]) {
+        for (const media of document.querySelectorAll("video, audio")) {
+          if (media.localName === "video") {
+            // Hover previews of related videos: small, or muted looping clips, or named so.
+            const r = media.getBoundingClientRect();
+            const small = r.width < 320 || r.height < 180;
+            const preview = media.muted && media.loop;
+            if (small || preview) continue;
+          }
+          const sources = [media.currentSrc, media.getAttribute("src")];
+          for (const s of media.querySelectorAll("source")) sources.push(s.getAttribute("src"));
+          for (const u of sources) {
             if (!u) continue;
             const abs = new URL(u, location.href).href;
-            if (/^https?:/i.test(abs)) urls.add(abs); // blob: = MediaSource player, not a file
+            // blob: = MediaSource player, not a file.
+            if (/^https?:/i.test(abs) && !/thumb|preview|teaser|sprite/i.test(abs)) urls.add(abs);
           }
         }
         // The frame holding the player is the referer its media requests carry.
@@ -288,7 +361,7 @@ api.tabs.onUpdated.addListener((tabId, info) => {
 api.tabs.onRemoved.addListener((tabId) => forgetTab(tabId));
 
 function updateBadge(tabId) {
-  const n = media.get(tabId)?.length ?? 0;
+  const n = visibleMedia(media.get(tabId) ?? []).length;
   api.action.setBadgeBackgroundColor({ color: "#2f6fde", tabId }).catch(() => {});
   api.action.setBadgeText({ text: n ? String(n) : "", tabId }).catch(() => {});
 }
@@ -346,17 +419,23 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
       const { daemonUp, hostError } = await hello();
       const tab = msg.tabId != null ? await api.tabs.get(msg.tabId).catch(() => null) : null;
       const needsPermission = IS_FIREFOX && !(await api.permissions.contains({ origins: ["<all_urls>"] }));
-      const list = msg.tabId != null ? [...(await mediaFor(msg.tabId))] : [];
+      let list = [];
       if (msg.tabId != null) {
-        for (const { url, referer } of await scanPage(msg.tabId)) {
-          if (!list.some((m) => m.url === url)) {
-            list.push({ url, kind: kindOfUrl(url), mime: "", size: null, referer, fromPage: true });
-          }
+        list = [...(await mediaFor(msg.tabId))];
+        const known = new Set(list.flatMap((m) => [m.url, ...(m.aliases ?? [])]));
+        const found = (await scanPage(msg.tabId))
+          .filter(({ url }) => !known.has(url))
+          .map(({ url, referer }) => ({ url, kind: kindOfUrl(url), mime: "", size: null, referer, fromPage: true }));
+        if (found.length) {
+          // Kept with the network finds, so the badge counts them too.
+          list = list.concat(found);
+          saveTab(msg.tabId, list);
+          for (const item of found) if (item.kind === "hls") inspectStream(msg.tabId, item);
         }
       }
       return {
         daemonUp, hostError, needsPermission,
-        media: list,
+        media: visibleMedia(list),
         pageUrl: tab?.url ?? null,
         pageTitle: tab?.title ?? null,
         videoSite: tab?.url ? isVideoSite(tab.url) : false,
@@ -364,6 +443,10 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     }
     if (msg.type === "download") {
       return { downloadId: await sendDownload(msg.download) };
+    }
+    if (msg.type === "media") {
+      // Light refresh while stream inspections finish; no page scan.
+      return visibleMedia(await mediaFor(msg.tabId));
     }
     if (msg.type === "list") {
       return (await call({ type: "list" })).downloads;
