@@ -326,23 +326,25 @@ async function refresh() {
     state = { hostError: e.message, media: [] };
   }
   const st = $("status");
-  if (state.daemonUp) {
-    st.textContent = "conectado";
-    st.className = "ok";
-  } else {
-    st.textContent = "sin conexión";
-    st.className = "err";
-    say(state.hostError || "Boost no disponible", "err");
+  // Boost closed: the only thing to do is open it.
+  $("launch").hidden = state.daemonUp;
+  for (const id of ["permission", "downloads-section", "page", "audio", "media-section"]) {
+    if (!state.daemonUp) $(id).hidden = true;
   }
+  if (!state.daemonUp) {
+    st.textContent = "cerrado";
+    st.className = "err";
+    return;
+  }
+  st.textContent = "conectado";
+  st.className = "ok";
+  say("");
+  $("media-section").hidden = false;
   $("permission").hidden = !state.needsPermission;
   const web = /^https?:/i.test(tab?.url || "");
   $("page").hidden = !web;
   $("audio").hidden = !web;
   renderMedia(state.media || []);
-  if (!state.daemonUp) {
-    for (const b of PAGE_BUTTONS) $(b).disabled = true;
-    return;
-  }
   followInspections(state.media || []);
   if (web) checkPage();
   refreshDownloads();
@@ -352,6 +354,23 @@ $("page-best").onclick = (e) => download({ url: tab.url, video: true }, e.target
 $("page-mp3").onclick = (e) => download({ url: tab.url, video: true, audioKbps: mp3Kbps() }, e.target);
 $("page-formats").onclick = loadFormats;
 $("formats-go").onclick = (e) => download({ url: tab.url, video: true, format: $("formats").value }, e.target);
+$("launch-go").onclick = async (e) => {
+  e.target.disabled = true;
+  say("Abriendo Boost…");
+  try {
+    const r = await send({ type: "launch" }, 20_000);
+    if (r.running) {
+      await refresh();
+    } else {
+      // The browser asks first whether to open Boost; once it runs, reopen this panel.
+      say("Confirma en el navegador que quieres abrir Boost.");
+    }
+  } catch (err) {
+    say(err.message, "err");
+  } finally {
+    e.target.disabled = false;
+  }
+};
 $("grant").onclick = async () => {
   if (await api.permissions.request({ origins: ["<all_urls>"] })) refresh();
 };

@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-const FIREFOX_ID: &str = "raudo@raudo.org";
+const FIREFOX_ID: &str = "boost-downloader@boost.app";
+/// The add-on's ID while the app was called raudo.
+const OLD_FIREFOX_ID: &str = "raudo@raudo.org";
 const CHROME_ID: &str = "boloeecmdjhgdkcahinhhpakjhiljbhi";
 
 #[derive(Debug, Serialize)]
@@ -19,8 +21,10 @@ pub struct WebExtension {
     pub name: &'static str,
     /// The browser's profile folder exists.
     pub present: bool,
-    /// Some profile has the raudo extension.
+    /// Some profile has the extension.
     pub installed: bool,
+    /// Only the pre-Boost extension is installed (Firefox).
+    pub outdated: bool,
     /// raudo can install it (only Firefox for now: the signed .xpi).
     pub available: bool,
 }
@@ -44,11 +48,16 @@ const CHROMIUM: &[Chromium] = &[
 
 pub fn list(xpi: Option<&Path>) -> Vec<WebExtension> {
     let firefox = firefox_roots();
+    let has = |id: &str| {
+        firefox.iter().flat_map(|r| subdirs(r)).any(|p| p.join("extensions").join(format!("{id}.xpi")).is_file())
+    };
+    let installed = has(FIREFOX_ID);
     let mut out = vec![WebExtension {
         browser: "firefox",
         name: "Firefox",
         present: firefox.iter().any(|r| r.is_dir()),
-        installed: firefox.iter().flat_map(|r| subdirs(r)).any(|p| p.join("extensions").join(format!("{FIREFOX_ID}.xpi")).is_file()),
+        installed,
+        outdated: !installed && has(OLD_FIREFOX_ID),
         available: xpi.is_some(),
     }];
     for c in CHROMIUM {
@@ -58,6 +67,7 @@ pub fn list(xpi: Option<&Path>) -> Vec<WebExtension> {
             name: c.name,
             present: roots.iter().any(|r| r.is_dir()),
             installed: roots.iter().flat_map(|r| subdirs(r)).any(|p| chromium_profile_has_raudo(&p)),
+            outdated: false,
             available: false,
         });
     }

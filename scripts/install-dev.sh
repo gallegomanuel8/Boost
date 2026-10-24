@@ -10,6 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$HOME/.local/bin"
 # Left by versions that used D-Bus activation; removed on install.
 OLD_DBUS_SERVICE="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.raudo.Manager.service"
+# Left by versions that started raudo-daemon at login; removed on install.
 AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/raudo-daemon.desktop"
 HOST_NAME="org.raudo.nmhost"
 CHROME_ID="boloeecmdjhgdkcahinhhpakjhiljbhi"
@@ -91,27 +92,20 @@ Type=Application
 Name=Boost
 GenericName=Gestor de descargas
 Comment=Descarga ficheros y vídeos con varias conexiones
-Exec=$BIN/boost
+Exec=$BIN/boost %u
 Icon=boost
 Terminal=false
 Categories=Network;FileTransfer;
 StartupWMClass=boost
+MimeType=x-scheme-handler/boost;
 EOF
 update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+xdg-mime default org.boost.app.desktop x-scheme-handler/boost
 gtk-update-icon-cache -q -t "$ICONS" >/dev/null 2>&1 || true
 
-echo "==> autostart with the session"
-# Sandboxed browsers cannot start the service themselves; this keeps it available.
-mkdir -p "$(dirname "$AUTOSTART")"
-cat > "$AUTOSTART" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Boost (servicio)
-Comment=Servicio de descargas de Boost
-Exec=$BIN/raudo-daemon
-NoDisplay=true
-X-GNOME-Autostart-enabled=true
-EOF
+# Boost runs only while the app is open: no background service at login. The
+# extension offers to launch it (sandboxed browsers through the boost: link).
+rm -f "$AUTOSTART"
 
 echo "==> Native Messaging manifests"
 rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"

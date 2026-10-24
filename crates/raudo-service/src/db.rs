@@ -246,5 +246,6 @@ fn info_from_row(r: &Row) -> rusqlite::Result<DownloadInfo> {
         queue: r.get(8)?,
         video: r.get(9)?,
         created_at: r.get(10)?,
+        file_missing: false,
     })
 }

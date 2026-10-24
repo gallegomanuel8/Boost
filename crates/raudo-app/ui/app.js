@@ -112,6 +112,11 @@ const STATUS = { downloading: "Descargando", queued: "En cola", paused: "En paus
 const ACTIVE = ["downloading", "queued", "paused"];
 const CAN_RESUME = ["paused", "error"];
 const CAN_PAUSE = ["downloading", "queued"];
+const canResume = (d) => CAN_RESUME.includes(d.status);
+const canPause = (d) => CAN_PAUSE.includes(d.status);
+// Finished but deleted from disk, or failed: fetch it again from the start.
+const canRestart = (d) => d.file_missing || d.status === "error";
+const statusText = (d) => (d.file_missing ? "Fichero eliminado" : STATUS[d.status] || d.status);
 
 const CATEGORIES = [
   { heading: "Estado" },
@@ -221,7 +226,7 @@ function rowFor(d) {
   const left = active && d.size && d.speed > 0 ? duration((d.size - d.downloaded) / d.speed) : "";
   const typeText = [ext ? ext.toUpperCase() : KIND_LABEL[kind], d.video ? "vídeo web" : null,
     active && d.connections > 1 ? `${d.connections} conexiones` : null].filter(Boolean).join(" · ");
-  const pctText = d.status === "error" ? "—" : p != null ? nf1.format(p) + " %" : d.downloaded ? bytes(d.downloaded) : "";
+  const pctText = d.status === "error" || d.file_missing ? "—" : p != null ? nf1.format(p) + " %" : d.downloaded ? bytes(d.downloaded) : "";
   return el("button", {
     type: "button", role: "row", class: "row", "aria-selected": selected.has(d.id) ? "true" : "false",
     onclick: (e) => clickRow(e, d.id),
@@ -241,10 +246,10 @@ function rowFor(d) {
     el("span", { role: "cell", class: "muted num" }, d.size ? bytes(d.size) : d.status === "completed" ? bytes(d.downloaded) : "—"),
     el("span", { role: "cell", class: "prog" },
       el("span", { class: "small num" }, pctText),
-      el("span", { class: `bar ${d.status}` }, el("span", { style: `width: ${p ?? 0}%` }))),
+      el("span", { class: `bar ${d.status}` }, el("span", { style: `width: ${d.file_missing ? 0 : p ?? 0}%` }))),
     el("span", { role: "cell", class: "num" }, active && d.speed > 0 ? bytes(d.speed) + "/s" : ""),
     el("span", { role: "cell", class: "muted num" }, left),
-    el("span", { role: "cell", class: `st ${d.status}` }, STATUS[d.status] || d.status),
+    el("span", { role: "cell", class: `st ${d.file_missing ? "missing" : d.status}` }, statusText(d)),
   );
 }
 
@@ -271,6 +276,7 @@ function renderDetails() {
   $("d-error").hidden = d.status !== "error";
   $("d-error").textContent = d.error ? explain(d.error) : "";
   $("btn-reveal").hidden = false;
+  $("btn-restart").hidden = !canRestart(d);
 
   const p = pct(d);
   let conn = STATUS[d.status];
@@ -281,6 +287,8 @@ function renderDetails() {
     if (d.speed > 0) conn += ` · ${bytes(d.speed)}/s`;
   } else if (d.status === "paused" && p != null) {
     conn = `En pausa · se reanudará desde el ${nf1.format(p)} %`;
+  } else if (d.file_missing) {
+    conn = "Descargado, pero el fichero ya no está en la carpeta";
   }
   $("d-conn").textContent = conn + (d.size ? ` · ${bytes(d.downloaded)} de ${bytes(d.size)}` : "");
 
@@ -295,7 +303,7 @@ function renderDetails() {
         el("span", { style: `width: ${Math.min(100, (done / len) * 100)}%` }));
     }));
   } else {
-    map.replaceChildren(el("span", { style: "left: 0; width: 100%" }, el("span", { style: `width: ${p ?? 0}%` })));
+    map.replaceChildren(el("span", { style: "left: 0; width: 100%" }, el("span", { style: `width: ${d.file_missing ? 0 : p ?? 0}%` })));
   }
 }
 
@@ -303,7 +311,8 @@ function renderDetails() {
 function renderMultiDetails(sel) {
   $("d-name").textContent = `${sel.length} descargas seleccionadas`;
   const counts = Object.entries(STATUS)
-    .map(([k, label]) => [label, sel.filter((d) => d.status === k).length])
+    .map(([k, label]) => [label, sel.filter((d) => d.status === k && !d.file_missing).length])
+    .concat([["Fichero eliminado", sel.filter((d) => d.file_missing).length]])
     .filter(([, n]) => n > 0)
     .map(([label, n]) => `${n} ${label.toLowerCase()}`);
   $("d-url").textContent = counts.join(" · ");
@@ -311,6 +320,7 @@ function renderMultiDetails(sel) {
   $("d-folder").hidden = true;
   $("d-error").hidden = true;
   $("btn-reveal").hidden = true;
+  $("btn-restart").hidden = !sel.some(canRestart);
   const known = sel.filter((d) => d.size);
   const size = known.reduce((s, d) => s + d.size, 0);
   const done = known.reduce((s, d) => s + (d.status === "completed" ? d.size : Math.min(d.downloaded, d.size)), 0);
@@ -345,8 +355,8 @@ function renderFooter() {
 
 function renderToolbar() {
   const sel = selection();
-  $("btn-resume").disabled = !sel.some((d) => CAN_RESUME.includes(d.status));
-  $("btn-pause").disabled = !sel.some((d) => CAN_PAUSE.includes(d.status));
+  $("btn-resume").disabled = !sel.some(canResume);
+  $("btn-pause").disabled = !sel.some(canPause);
   $("btn-remove").disabled = sel.length === 0;
   const anyRunning = [...downloads.values()].some((x) => CAN_PAUSE.includes(x.status));
   const anyPaused = [...downloads.values()].some((x) => x.status === "paused");
@@ -381,8 +391,8 @@ async function reveal(id) {
 }
 
 /// Runs `cmd` on every selected download it applies to; reports the failures together.
-async function forSelection(cmd, statuses) {
-  const targets = selection().filter((d) => statuses.includes(d.status));
+async function forSelection(cmd, applies) {
+  const targets = selection().filter(applies);
   const failed = [];
   await Promise.all(targets.map((d) => call(cmd, { id: d.id }).catch((e) => failed.push(`${displayName(d)}: ${e}`))));
   if (failed.length) toast(failed.join("\n"));
@@ -395,8 +405,9 @@ async function act(fn) {
 // ------------------------------------------------------------ main actions
 
 $("search").addEventListener("input", (e) => { query = e.target.value; render(); });
-$("btn-resume").onclick = () => forSelection("resume", CAN_RESUME);
-$("btn-pause").onclick = () => forSelection("pause", CAN_PAUSE);
+$("btn-resume").onclick = () => forSelection("resume", canResume);
+$("btn-pause").onclick = () => forSelection("pause", canPause);
+$("btn-restart").onclick = () => forSelection("restart", canRestart);
 $("btn-reveal").onclick = () => focus != null && reveal(focus);
 $("btn-pause-all").onclick = () => act(() => call($("btn-pause-all").textContent.startsWith("Pausar") ? "pause_all" : "resume_all"));
 
@@ -433,8 +444,9 @@ $("rm-go").value = "ok";
 const menu = $("ctx");
 function openMenu(x, y) {
   const sel = selection();
-  $("ctx-resume").disabled = !sel.some((d) => CAN_RESUME.includes(d.status));
-  $("ctx-pause").disabled = !sel.some((d) => CAN_PAUSE.includes(d.status));
+  $("ctx-resume").disabled = !sel.some(canResume);
+  $("ctx-pause").disabled = !sel.some(canPause);
+  $("ctx-restart").hidden = !sel.some(canRestart);
   $("ctx-reveal").disabled = sel.length !== 1;
   $("ctx-remove").textContent = sel.length > 1 ? `Eliminar ${sel.length} descargas…` : "Eliminar…";
   menu.hidden = false;
@@ -444,8 +456,9 @@ function openMenu(x, y) {
   menu.querySelector("button:not(:disabled)")?.focus();
 }
 function closeMenu() { menu.hidden = true; }
-$("ctx-resume").onclick = () => { closeMenu(); forSelection("resume", CAN_RESUME); };
-$("ctx-pause").onclick = () => { closeMenu(); forSelection("pause", CAN_PAUSE); };
+$("ctx-resume").onclick = () => { closeMenu(); forSelection("resume", canResume); };
+$("ctx-pause").onclick = () => { closeMenu(); forSelection("pause", canPause); };
+$("ctx-restart").onclick = () => { closeMenu(); forSelection("restart", canRestart); };
 $("ctx-reveal").onclick = () => { closeMenu(); if (focus != null) reveal(focus); };
 $("ctx-remove").onclick = () => { closeMenu(); $("btn-remove").click(); };
 document.addEventListener("mousedown", (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
@@ -653,6 +666,7 @@ async function loadExtensions() {
   try { list = await call("web_extensions"); } catch (e) { toast(String(e)); return; }
   $("ext-list").replaceChildren(...list.map((x) => {
     const state = x.installed ? "Extensión instalada"
+      : x.outdated ? "Tienes la extensión antigua (raudo): instala la nueva y quita la antigua"
       : !x.present ? "No se ha encontrado este navegador"
       : x.available ? "Extensión no instalada"
       : "Extensión no instalada · aún no publicada";

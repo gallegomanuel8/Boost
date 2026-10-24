@@ -62,6 +62,11 @@ async fn resume(id: i64) -> CmdResult<()> {
 }
 
 #[tauri::command]
+async fn restart(id: i64) -> CmdResult<()> {
+    client().await?.restart(id).await.map_err(err)
+}
+
+#[tauri::command]
 async fn remove(id: i64, delete_file: bool) -> CmdResult<()> {
     client().await?.remove(id, delete_file).await.map_err(err)
 }
@@ -270,16 +275,25 @@ fn notify_status(app: &AppHandle, d: &DownloadInfo) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
+fn is_background_arg(arg: &str) -> bool {
+    arg == "--background" || arg.starts_with("boost:")
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
-    // Started at login, or by the browser host: stay in the tray.
-    let background = std::env::args().any(|a| a == "--background");
+    // Started at login, by the browser host, or by the extension's "launch" link
+    // (boost://launch): stay in the tray.
+    let background = std::env::args().skip(1).any(|a| is_background_arg(&a));
 
     tauri::Builder::default()
         // Must be first: a second launch only brings this window forward.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().skip(1).any(|a| is_background_arg(a)) {
+                show_main(app);
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -319,6 +333,7 @@ fn main() {
             add,
             pause,
             resume,
+            restart,
             remove,
             details,
             formats,

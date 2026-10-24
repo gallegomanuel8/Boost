@@ -63,6 +63,33 @@ async function hello() {
   return { daemonUp, hostError };
 }
 
+/** Opens Boost in the background. The native host starts it when it can; a
+ * sandboxed browser's host cannot, so the boost: link asks the desktop to. */
+async function launchBoost() {
+  try {
+    if ((await call({ type: "launch" })).daemon) {
+      await hello();
+      return true;
+    }
+  } catch {
+    // No host at all: the link still works.
+  }
+  const tab = await api.tabs.create({ url: "boost://launch" });
+  closeWhenRunning(tab.id);
+  return false;
+}
+
+/** Closes the tab the boost: link leaves behind once Boost answers. */
+async function closeWhenRunning(tabId) {
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if ((await hello()).daemonUp) {
+      api.tabs.remove(tabId).catch(() => {});
+      return;
+    }
+  }
+}
+
 async function cookieHeader(url) {
   try {
     const query = IS_FIREFOX ? { url, firstPartyDomain: null } : { url };
@@ -443,6 +470,9 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     }
     if (msg.type === "download") {
       return { downloadId: await sendDownload(msg.download) };
+    }
+    if (msg.type === "launch") {
+      return { running: await launchBoost() };
     }
     if (msg.type === "media") {
       // Light refresh while stream inspections finish; no page scan.

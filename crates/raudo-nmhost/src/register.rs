@@ -4,6 +4,9 @@
 //! `HKCU\Software\<browser>\NativeMessagingHosts\org.raudo.nmhost`.
 //! Linux: manifests in each installed browser's per-user folder (sandboxed
 //! Flatpak browsers are set up by scripts/install-dev.sh instead).
+//!
+//! Also the `boost:` link the extension opens to launch Boost when this host
+//! cannot start it (Windows: registry; Linux: the .desktop file of the app).
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +15,9 @@ use serde_json::json;
 pub const HOST_NAME: &str = "org.raudo.nmhost";
 /// Pinned by the public key in the extension's manifest.
 pub const CHROME_ID: &str = "boloeecmdjhgdkcahinhhpakjhiljbhi";
-pub const FIREFOX_ID: &str = "raudo@raudo.org";
+pub const FIREFOX_ID: &str = "boost-downloader@boost.app";
+/// Firefox add-on ID before the rename to Boost; accepted until users move to the new one.
+pub const OLD_FIREFOX_ID: &str = "raudo@raudo.org";
 
 fn chromium_manifest(host: &Path) -> serde_json::Value {
     json!({
@@ -30,7 +35,7 @@ fn firefox_manifest(host: &Path) -> serde_json::Value {
         "description": "Boost download manager",
         "path": host,
         "type": "stdio",
-        "allowed_extensions": [FIREFOX_ID],
+        "allowed_extensions": [FIREFOX_ID, OLD_FIREFOX_ID],
     })
 }
 
@@ -61,6 +66,7 @@ mod imp {
         r"Software\Vivaldi\NativeMessagingHosts",
     ];
     const FIREFOX_KEY: &str = r"Software\Mozilla\NativeMessagingHosts";
+    const URL_SCHEME_KEY: &str = r"Software\Classes\boost";
 
     pub fn register() -> std::io::Result<Vec<String>> {
         let host = this_exe()?;
@@ -80,6 +86,16 @@ mod imp {
         let (key, _) = hkcu.create_subkey(format!(r"{FIREFOX_KEY}\{HOST_NAME}"))?;
         key.set_value("", &firefox.display().to_string())?;
         done.push(FIREFOX_KEY.to_string());
+
+        let app = dir.join("boost.exe");
+        if app.is_file() {
+            let (key, _) = hkcu.create_subkey(URL_SCHEME_KEY)?;
+            key.set_value("", &"URL:Boost")?;
+            key.set_value("URL Protocol", &"")?;
+            let (cmd, _) = key.create_subkey(r"shell\open\command")?;
+            cmd.set_value("", &format!("\"{}\" \"%1\"", app.display()))?;
+            done.push(URL_SCHEME_KEY.to_string());
+        }
         Ok(done)
     }
 
@@ -88,6 +104,7 @@ mod imp {
         for root in CHROMIUM_KEYS.iter().chain([&FIREFOX_KEY]) {
             let _ = hkcu.delete_subkey_all(format!(r"{root}\{HOST_NAME}"));
         }
+        let _ = hkcu.delete_subkey_all(URL_SCHEME_KEY);
         if let Some(dir) = this_exe()?.parent() {
             let _ = std::fs::remove_file(dir.join(format!("{HOST_NAME}.chromium.json")));
             let _ = std::fs::remove_file(dir.join(format!("{HOST_NAME}.firefox.json")));
@@ -159,7 +176,8 @@ mod tests {
         assert_eq!(c["allowed_origins"][0], "chrome-extension://boloeecmdjhgdkcahinhhpakjhiljbhi/");
         assert_eq!(c["path"], "/opt/raudo/raudo-nmhost");
         let f = firefox_manifest(host);
-        assert_eq!(f["allowed_extensions"][0], "raudo@raudo.org");
+        assert_eq!(f["allowed_extensions"][0], "boost-downloader@boost.app");
+        assert_eq!(f["allowed_extensions"][1], "raudo@raudo.org");
         assert_eq!(f["type"], "stdio");
     }
 }

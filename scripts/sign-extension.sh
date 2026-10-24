@@ -34,6 +34,6 @@ cd "$ROOT"
 npx -y web-ext@10.7.0 sign -s extension --channel unlisted --artifacts-dir "$OUT"
 
 XPI=$(ls -t "$OUT"/*-"$VERSION".xpi | head -1)
-mv "$XPI" "$OUT/raudo-$VERSION.xpi"
-echo "Firmado: $OUT/raudo-$VERSION.xpi"
-command -v firefox >/dev/null && firefox "$OUT/raudo-$VERSION.xpi"
+mv "$XPI" "$OUT/boost-$VERSION.xpi"
+echo "Firmado: $OUT/boost-$VERSION.xpi"
+command -v firefox >/dev/null && firefox "$OUT/boost-$VERSION.xpi"

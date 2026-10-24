@@ -118,6 +118,7 @@ impl Manager {
         let mut info = info;
         info.speed = speed;
         info.connections = connections;
+        mark_missing(&mut info);
         Ok(serde_json::json!({ "info": info, "path": path, "segments": segments }))
     }
 
@@ -125,6 +126,7 @@ impl Manager {
         let mut list = self.db.lock().unwrap().list().map_err(db_err)?;
         let running = self.running.lock().unwrap();
         for d in &mut list {
+            mark_missing(d);
             if let Some(r) = running.get(&d.id) {
                 d.speed = r.speed;
                 d.connections = r.connections;
@@ -158,6 +160,26 @@ impl Manager {
             Some(_) => return Ok(()),
         }
         drop(db);
+        self.changed(id);
+        self.schedule();
+        Ok(())
+    }
+
+    /// Downloads again from scratch: a finished download whose file is gone, or a failed one.
+    pub fn restart(self: &Arc<Self>, id: i64) -> Result<()> {
+        if self.running.lock().unwrap().contains_key(&id) {
+            return Err("la descarga está en curso".into());
+        }
+        let db = self.db.lock().unwrap();
+        match db.status(id).map_err(db_err)? {
+            None => return Err(format!("no download {id}")),
+            Some(Status::Downloading) => return Ok(()),
+            Some(_) => {}
+        }
+        db.clear_state(id).map_err(db_err)?;
+        db.set_status(id, Status::Queued, None).map_err(db_err)?;
+        drop(db);
+        self.clean_temp(id);
         self.changed(id);
         self.schedule();
         Ok(())
@@ -602,7 +624,14 @@ impl Manager {
                 info.speed = r.speed;
                 info.connections = r.connections;
             }
+            mark_missing(&mut info);
             let _ = self.events.send(raudo_ipc::Event::Changed { info });
         }
     }
+}
+
+/// Flags completed downloads whose file the user has since deleted or moved.
+fn mark_missing(info: &mut DownloadInfo) {
+    info.file_missing = info.status == Status::Completed
+        && info.filename.as_ref().is_some_and(|f| !PathBuf::from(&info.dir).join(f).exists());
 }

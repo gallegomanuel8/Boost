@@ -37,6 +37,8 @@ enum Msg {
         #[serde(rename = "downloadId")]
         download_id: i64,
     },
+    /// Start Boost in the background (the popup's "launch" button).
+    Launch,
 }
 
 #[derive(Deserialize)]
@@ -158,31 +160,33 @@ fn remote(e: ClientError) -> String {
 }
 
 impl Host {
-    /// Connected client; starts raudo once if it is not running.
+    /// Connected client. Boost is never started from here unasked: closing the
+    /// app stops the downloads, and the popup offers to launch it.
     async fn client(&mut self) -> Result<&mut Client, String> {
         if self.client.is_none() {
-            let client = match Client::connect("nmhost").await {
-                Ok(c) => c,
-                Err(ClientError::NotRunning) if launch_service() => {
-                    let mut last = ClientError::NotRunning;
-                    let mut connected = None;
-                    for _ in 0..50 {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        match Client::connect("nmhost").await {
-                            Ok(c) => {
-                                connected = Some(c);
-                                break;
-                            }
-                            Err(e) => last = e,
-                        }
-                    }
-                    connected.ok_or_else(|| remote(last))?
-                }
-                Err(e) => return Err(remote(e)),
-            };
-            self.client = Some(client);
+            self.client = Some(Client::connect("nmhost").await.map_err(remote)?);
         }
         Ok(self.client.as_mut().expect("just set"))
+    }
+
+    /// Starts Boost and waits until it answers. `false` when this host cannot
+    /// start it (no Boost next to it, as in a Flatpak sandbox): the extension
+    /// then opens the boost:// link, which the desktop hands to Boost.
+    async fn launch(&mut self) -> bool {
+        if self.call(raudo_ipc::Call::Ping).await.is_ok() {
+            return true;
+        }
+        if !launch_service() {
+            return false;
+        }
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if let Ok(c) = Client::connect("nmhost").await {
+                self.client = Some(c);
+                return true;
+            }
+        }
+        false
     }
 
     /// Runs one request; on a broken connection (raudo restarted) reconnects once.
@@ -240,6 +244,7 @@ impl Host {
                 self.call(Call::Remove { id: download_id, delete_file: false }).await?;
                 Ok(json!({ "cancelled": download_id }))
             }
+            Msg::Launch => Ok(json!({ "daemon": self.launch().await })),
         }
     }
 }

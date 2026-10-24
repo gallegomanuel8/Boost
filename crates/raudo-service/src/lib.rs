@@ -102,6 +102,7 @@ impl Handler for IpcHandler {
                 Call::List => m.list().map(to_value),
                 Call::Pause { id } => m.pause(id).map(|_| Value::Null),
                 Call::Resume { id } => m.resume(id).map(|_| Value::Null),
+                Call::Restart { id } => m.restart(id).map(|_| Value::Null),
                 Call::Remove { id, delete_file } => m.remove(id, delete_file).map(|_| Value::Null),
                 Call::SetSpeedLimit { kib } => {
                     m.set_speed_limit(kib);

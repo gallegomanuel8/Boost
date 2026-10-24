@@ -127,4 +127,7 @@ pub struct DownloadInfo {
     /// Unix seconds.
     #[serde(default)]
     pub created_at: i64,
+    /// Completed, but the file is no longer on disk (deleted or moved by the user).
+    #[serde(default)]
+    pub file_missing: bool,
 }

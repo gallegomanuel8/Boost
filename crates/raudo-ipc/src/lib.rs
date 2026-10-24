@@ -31,6 +31,8 @@ pub enum Call {
     List,
     Pause { id: i64 },
     Resume { id: i64 },
+    /// Download again from scratch (finished download whose file is gone, or failed).
+    Restart { id: i64 },
     Remove { id: i64, delete_file: bool },
     SetSpeedLimit { kib: u64 },
     SetMaxConcurrent { n: u32 },
@@ -157,6 +159,9 @@ impl Client {
     }
     pub async fn pause(&mut self, id: i64) -> Result<()> {
         self.call(Call::Pause { id }).await.map(drop)
+    }
+    pub async fn restart(&mut self, id: i64) -> Result<()> {
+        self.call(Call::Restart { id }).await.map(drop)
     }
     pub async fn resume(&mut self, id: i64) -> Result<()> {
         self.call(Call::Resume { id }).await.map(drop)

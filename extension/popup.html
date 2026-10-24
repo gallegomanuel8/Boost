@@ -47,6 +47,11 @@
     <span id="status">conectando…</span>
   </header>
 
+  <section id="launch" hidden>
+    <p class="hint">Boost está cerrado.</p>
+    <button id="launch-go" class="primary">Lanzar aplicación</button>
+  </section>
+
   <section id="permission" hidden>
     <p class="hint">Boost necesita acceso a las webs para detectar vídeos y descargas.</p>
     <button id="grant" class="primary">Conceder acceso</button>
@@ -87,7 +92,7 @@
     <p class="hint" id="audio-hint" hidden></p>
   </section>
 
-  <section>
+  <section id="media-section">
     <h2>Medios detectados</h2>
     <ul id="media"></ul>
     <p class="empty" id="media-empty"></p>

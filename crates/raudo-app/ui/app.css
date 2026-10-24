@@ -86,7 +86,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .table-wrap { flex: 1; min-height: 0; overflow: auto; }
 .table { min-width: 820px; }
 .row {
-  display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) 110px 170px 100px 90px 110px;
+  display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) 110px 170px 100px 90px 130px;
   gap: 12px; align-items: center; padding: 9px 18px; border: 0; border-bottom: 1px solid var(--line);
   background: transparent; text-align: left;
 }
@@ -109,7 +109,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .bar > span { display: block; height: 100%; background: var(--accent); transition: width .4s; }
 .st { font-size: 13px; font-weight: 600; }
 .st.downloading { color: var(--accent); } .st.queued { color: var(--muted); } .st.paused { color: var(--warn); }
-.st.completed { color: var(--ok); } .st.error { color: var(--err); }
+.st.completed { color: var(--ok); } .st.error { color: var(--err); } .st.missing { color: var(--warn); }
 .bar.paused > span, .segmap.paused span > span { background: var(--warn); }
 .bar.completed > span, .segmap.completed span > span { background: var(--ok); }
 .empty { padding: 40px 18px; margin: 0; color: var(--muted); text-align: center; }
