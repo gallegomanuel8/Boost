@@ -141,7 +141,7 @@ function describe(m) {
   const info = streamInfo.get(m.url);
   const kind = m.kind.toUpperCase();
   if (info === undefined) return `${kind} · comprobando…`;
-  if (info === null) return `${kind} · no se pudo leer`;
+  if (info === null) return `${kind} · no se pudo leer la lista; se intentará al descargar`;
   return [
     (info.container ?? "ts").toUpperCase(),
     info.height ? `${info.height}p` : null,
@@ -183,7 +183,9 @@ function renderMedia(all) {
         page: tab?.url ?? null,
       };
       const info = streamInfo.get(m.url);
-      const usable = !stream || (info !== null && !info?.live);
+      // Only a confirmed live stream is unusable. A failed inspection is not: the
+      // daemon can still fetch a fresh link from the page when downloading.
+      const usable = !info?.live;
       const get = el("button", { textContent: "Descargar", className: "primary", disabled: !usable });
       get.onclick = () => download({ ...base, video: stream }, get);
       const line = el("div", { className: "line" },

@@ -214,7 +214,13 @@ impl Manager {
                 };
                 serde_json::json!({ "supported": via.is_some(), "via": via })
             }
-            "hls" => serde_json::to_value(hls::inspect(&self.client, &request).await?).expect("serializable"),
+            "hls" => match hls::inspect(&self.client, &request).await {
+                Ok(info) => serde_json::to_value(info).expect("serializable"),
+                Err(e) => {
+                    warn!(url = %request.url, referer = ?request.referer, "inspect hls: {e}");
+                    return Err(e);
+                }
+            },
             other => return Err(format!("unknown inspect target {other}")),
         };
         let mut cache = self.inspected.lock().unwrap();
