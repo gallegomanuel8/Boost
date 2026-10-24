@@ -81,15 +81,27 @@ recientes). En distribuciones más antiguas, [compílalo desde el código](#comp
 
 ### Windows 10 y 11
 
+1. Descarga `boost-*-windows-x86_64-setup.exe`.
+2. Ábrelo y sigue el asistente. Si Windows SmartScreen avisa de que la aplicación no es
+   conocida, pulsa **Más información → Ejecutar de todas formas** (el instalador no está
+   firmado).
+
+Boost queda en `%LOCALAPPDATA%\Programs\Boost`, con acceso directo en el menú Inicio (y en
+el escritorio, si lo eliges), y se registra en los navegadores. Usa WebView2, que ya viene
+con Windows 10 y 11. Para desinstalar: *Configuración → Aplicaciones → Aplicaciones
+instaladas → Boost → Desinstalar*. El historial de descargas (`%APPDATA%\raudo`) se conserva.
+
+<details>
+<summary>Sin instalador: paquete .zip</summary>
+
 1. Descomprime `boost-*-windows-x86_64.zip`.
 2. Clic derecho en `install.ps1` → **Ejecutar con PowerShell**, o desde una terminal:
    ```powershell
    powershell -ExecutionPolicy Bypass -File install.ps1
    ```
 
-Boost queda en `%LOCALAPPDATA%\Programs\Boost`, con acceso directo en el menú Inicio, y se
-registra en los navegadores. Usa WebView2, que ya viene con Windows 10 y 11. Para
-desinstalar: `install.ps1 -Uninstall`.
+Para desinstalar: `install.ps1 -Uninstall`.
+</details>
 
 ### Vídeo y MP3: yt-dlp y ffmpeg
 
@@ -156,6 +168,13 @@ Otros scripts:
 
 - `scripts/package.sh` — genera los paquetes de una versión en `dist/` (Linux y, con
   `mingw64-gcc` y el target `x86_64-pc-windows-gnu`, también Windows).
+- `scripts/package-windows.ps1` — en Windows, compila y genera el instalador
+  `dist\boost-<versión>-windows-x86_64-setup.exe`. Necesita Rust, un compilador MinGW
+  (por ejemplo `winget install BrechtSanders.WinLibs.POSIX.UCRT`) e
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`):
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
+  ```
 - `scripts/sign-extension.sh` — firma la extensión de Firefox en addons.mozilla.org
   (necesita claves de la API de AMO).
 

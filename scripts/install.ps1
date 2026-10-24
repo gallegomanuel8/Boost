@@ -21,7 +21,7 @@ if ($Uninstall) {
 
 $Here = $PSScriptRoot
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-foreach ($f in "boost.exe", "raudo-nmhost.exe", "raudo-cli.exe", "boost.xpi") {
+foreach ($f in "boost.exe", "WebView2Loader.dll", "raudo-nmhost.exe", "raudo-cli.exe", "boost.xpi") {
     if (Test-Path "$Here\$f") { Copy-Item "$Here\$f" $Dest -Force }
 }
 if (Test-Path "$Here\extension") {

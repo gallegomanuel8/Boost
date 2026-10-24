@@ -50,6 +50,8 @@ echo "==> Windows package"
 W="$WORK/boost-$VERSION-windows-x86_64"
 mkdir -p "$W"
 cp target/x86_64-pc-windows-gnu/release/{boost,raudo-nmhost,raudo-cli}.exe "$W/"
+# GNU builds load WebView2 through this DLL, which Windows does not ship.
+cp target/x86_64-pc-windows-gnu/release/WebView2Loader.dll "$W/"
 cp scripts/install.ps1 "$W/"
 common "$W"
 (cd "$WORK" && zip -qr "$DIST/boost-$VERSION-windows-x86_64.zip" "$(basename "$W")")
