@@ -92,6 +92,15 @@ function extOf(name) {
   return m ? m[1].toLowerCase() : "";
 }
 
+/** Extension implied by the MIME type, for URLs like download.php?id=1. */
+const MIME_EXT = {
+  "application/zip": "zip", "application/x-zip-compressed": "zip", "application/x-7z-compressed": "7z",
+  "application/vnd.rar": "rar", "application/x-rar-compressed": "rar", "application/gzip": "gz",
+  "application/x-iso9660-image": "iso", "application/pdf": "pdf", "application/vnd.android.package-archive": "apk",
+  "application/x-msdownload": "exe", "application/x-rpm": "rpm", "application/vnd.debian.binary-package": "deb",
+  "video/mp4": "mp4", "video/webm": "webm", "video/x-matroska": "mkv", "audio/mpeg": "mp3", "audio/flac": "flac",
+};
+
 function shouldCapture(item) {
   const c = config?.capture;
   if (!c?.enabled || !daemonUp) return false;
@@ -99,9 +108,11 @@ function shouldCapture(item) {
   if (!/^https?:/i.test(url) || passThrough.has(url)) return false;
   let path = "";
   try { path = new URL(url).pathname; } catch { /* keep empty */ }
-  const ext = extOf(item.filename) || extOf(path);
+  // Chromium often reports an empty filename at creation; the MIME type is known.
+  const ext = extOf(item.filename) || extOf(path) || MIME_EXT[(item.mime || "").toLowerCase()] || "";
   if (!c.exts.includes(ext)) return false;
-  const size = item.totalBytes ?? item.fileSize ?? -1;
+  // 0 or -1 means "not known yet" (Chromium reports 0 at creation): judge by type alone.
+  const size = item.totalBytes > 0 ? item.totalBytes : item.fileSize > 0 ? item.fileSize : -1;
   return size < 0 || size >= c.minSize;
 }
 
