@@ -9,3 +9,4 @@
 *.raudo
 *.raudo.json
 /extension-key.pem
+/web-ext-artifacts/
