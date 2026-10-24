@@ -188,13 +188,48 @@ pub fn has_extension(name: &str) -> bool {
         .is_some_and(|(s, e)| !s.is_empty() && (1..=5).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
+/// Longest file name produced, in bytes. Linux allows 255; this leaves room for
+/// " (12)" and the ".raudo" partial-file suffix.
+pub const MAX_NAME_BYTES: usize = 200;
+
+/// `s` cut to at most `max` bytes, on a character boundary.
+pub fn truncate_bytes(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// A page title made usable as a file name stem, at most `max` bytes. Unlike
+/// [`sanitize`], a trailing ".something" is not an extension ("… on Example.vid").
+pub fn sanitize_stem(title: &str, max: usize) -> Option<String> {
+    let cleaned: String = title
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
+        .collect();
+    let stem = truncate_bytes(cleaned.trim().trim_start_matches('.'), max).trim_end();
+    (!stem.is_empty()).then(|| stem.to_owned())
+}
+
 /// Strips path separators and control characters; rejects names that would escape the folder.
+/// Long names (page titles full of hashtags) are shortened, keeping the extension.
 pub fn sanitize(name: &str) -> Option<String> {
     let cleaned: String = name
         .chars()
         .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
         .collect();
-    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
+    let mut cleaned = cleaned.trim().trim_start_matches('.').to_string();
+    if cleaned.len() > MAX_NAME_BYTES {
+        let (stem, ext) = match cleaned.rsplit_once('.') {
+            Some((s, e)) if has_extension(&cleaned) && e.len() < 16 => (s.to_owned(), format!(".{e}")),
+            _ => (cleaned.clone(), String::new()),
+        };
+        cleaned = format!("{}{ext}", truncate_bytes(&stem, MAX_NAME_BYTES - ext.len()).trim_end());
+    }
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
@@ -266,5 +301,16 @@ mod tests {
         assert_eq!(sanitize("../../etc/passwd").as_deref(), Some("_.._etc_passwd"));
         assert_eq!(filename_from_url("https://x.org/dir/file%20name.iso?x=1").as_deref(), Some("file name.iso"));
         assert_eq!(sanitize("..."), None);
+    }
+
+    #[test]
+    fn long_names_are_shortened_on_char_boundaries() {
+        let title = format!("{} #hashtag", "Señora ñandú 🎬 ".repeat(30));
+        let name = sanitize(&format!("{title}.mp4")).unwrap();
+        assert!(name.len() <= MAX_NAME_BYTES, "{} bytes", name.len());
+        assert!(name.ends_with(".mp4"));
+        let no_ext = sanitize(&title).unwrap();
+        assert!(no_ext.len() <= MAX_NAME_BYTES);
+        assert_eq!(truncate_bytes("ñ", 1), "");
     }
 }

@@ -165,7 +165,9 @@ pub async fn run(
                 if http::looks_random(name) {
                     // Made-up extensions (".vid") are dropped; the content decides at the end.
                     let ext = name.rsplit_once('.').filter(|_| http::has_known_extension(name)).map(|(_, e)| e);
-                    if let Some(clean) = http::sanitize(hint) {
+                    // Room for ".ext" (or a sniffed one added at the end).
+                    let room = http::MAX_NAME_BYTES - ext.map_or(6, |e| e.len() + 1);
+                    if let Some(clean) = http::sanitize_stem(hint, room) {
                         st.filename = Some(match ext {
                             Some(e) => format!("{clean}.{e}"),
                             None => clean,
@@ -347,7 +349,25 @@ pub async fn run(
 async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<(State, Response), Error> {
     let mut h = headers.clone();
     http::insert_range(&mut h, 0, None);
-    let resp = client.get(url).headers(h).send().await?;
+    // Busy servers answer 503/429 now and then: retry a few times before giving up.
+    let mut attempt = 0u32;
+    let resp = loop {
+        let resp = client.get(url).headers(h.clone()).send().await?;
+        let s = resp.status();
+        let transient = s == StatusCode::TOO_MANY_REQUESTS || s.is_server_error();
+        if !transient || attempt >= 4 {
+            break resp;
+        }
+        attempt += 1;
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        let wait = Duration::from_secs(retry_after.unwrap_or(2u64 << attempt).min(60));
+        debug!(%url, %s, ?wait, "probe retry");
+        tokio::time::sleep(wait).await;
+    };
     let status = resp.status();
     if !status.is_success() {
         return Err(Error::Status(status));

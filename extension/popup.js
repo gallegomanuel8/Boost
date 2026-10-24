@@ -73,11 +73,39 @@ async function cancel(d, button) {
   }
 }
 
+/** Daemon errors in plain words; the raw text stays in the tooltip. */
+function explain(error) {
+  if (/403/.test(error)) return "el servidor denegó el acceso (enlace caducado o protegido)";
+  if (/404/.test(error)) return "el vídeo ya no existe en el servidor";
+  if (/50[0-9]|429/.test(error)) return "el servidor está ocupado; inténtalo en un rato";
+  if (/Unsupported URL/i.test(error)) return "esta web no está soportada";
+  if (/live streams/i.test(error)) return "es una emisión en directo";
+  return error;
+}
+
+const RECENT_ERROR_SECS = 600;
+
 function renderDownloads(list) {
-  const shown = list.filter((d) => d.status === "downloading");
-  $("downloads-section").hidden = shown.length === 0;
+  // In progress, plus failures of the last minutes: a download that fails at once
+  // would otherwise look as if the button did nothing.
+  const now = Date.now() / 1000;
+  const failed = list.filter((d) => d.status === "error" && now - (d.created_at || 0) < RECENT_ERROR_SECS);
+  const running = list.filter((d) => d.status === "downloading");
+  $("downloads-section").hidden = running.length + failed.length === 0;
   $("downloads").replaceChildren(
-    ...shown.map((d) => {
+    ...failed.map((d) => {
+      const remove = el("button", { textContent: "Quitar", title: "Quitar de la lista" });
+      remove.onclick = () => cancel(d, remove);
+      return el(
+        "li",
+        { className: "failed" },
+        el("div", { className: "line" },
+          el("span", { className: "name", textContent: d.filename || shortName(d.url), title: d.url }),
+          remove),
+        el("div", { className: "meta", textContent: `Error: ${explain(d.error || "")}`, title: d.error || "" }),
+      );
+    }),
+    ...running.map((d) => {
       const pct = d.size ? Math.min(100, (d.downloaded / d.size) * 100) : null;
       const size = d.size ? `${human(d.downloaded)} / ${human(d.size)}` : human(d.downloaded) || "tamaño desconocido";
       const meta = [pct != null ? `${pct.toFixed(1)} %` : null, size, d.speed ? `${human(Math.round(d.speed))}/s` : null]

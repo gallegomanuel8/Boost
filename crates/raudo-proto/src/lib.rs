@@ -131,6 +131,9 @@ pub struct DownloadInfo {
     pub error: Option<String>,
     pub queue: i64,
     pub video: bool,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created_at: i64,
 }
 
 #[zbus::proxy(interface = "org.raudo.Manager1", default_service = "org.raudo.Manager", default_path = "/org/raudo/Manager")]

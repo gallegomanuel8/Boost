@@ -210,7 +210,7 @@ impl Db {
 }
 
 const SELECT_INFO: &str =
-    "SELECT id, url, dir, filename, status, size, downloaded, error, queue_id, video FROM downloads";
+    "SELECT id, url, dir, filename, status, size, downloaded, error, queue_id, video, created_at FROM downloads";
 
 fn info_from_row(r: &Row) -> rusqlite::Result<DownloadInfo> {
     let status: String = r.get(4)?;
@@ -227,5 +227,6 @@ fn info_from_row(r: &Row) -> rusqlite::Result<DownloadInfo> {
         error: r.get(7)?,
         queue: r.get(8)?,
         video: r.get(9)?,
+        created_at: r.get(10)?,
     })
 }

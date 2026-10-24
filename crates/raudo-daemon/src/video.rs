@@ -84,8 +84,9 @@ pub fn clean_stem(title: &str) -> String {
         .chars()
         .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
         .collect();
-    let stem: String = clean.trim().trim_start_matches('.').chars().take(150).collect();
-    if stem.is_empty() { "video".into() } else { stem }
+    // Bytes, not characters: emoji-laden titles would otherwise exceed the 255-byte limit.
+    let stem = raudo_core::http::truncate_bytes(clean.trim().trim_start_matches('.'), 180).trim_end();
+    if stem.is_empty() { "video".into() } else { stem.to_owned() }
 }
 
 fn context_args(req: &Request) -> Vec<String> {
@@ -438,7 +439,8 @@ mod tests {
     fn stems_are_clean() {
         assert_eq!(clean_stem(" a/b "), "a_b");
         assert_eq!(clean_stem("..."), "video");
-        assert_eq!(clean_stem(&"x".repeat(400)).len(), 150);
+        assert_eq!(clean_stem(&"x".repeat(400)).len(), 180);
+        assert!(clean_stem(&"🎬".repeat(100)).len() <= 180);
     }
 
     #[test]
