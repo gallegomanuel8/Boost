@@ -271,8 +271,45 @@ async fn write_frame(stdout: &mut tokio::io::Stdout, v: &Value) -> std::io::Resu
     stdout.flush().await
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::io::Result<()> {
+mod register;
+
+/// Browsers start the host with their own arguments (an origin, a manifest
+/// path); only these two words are commands for us.
+fn admin_command() -> Option<std::process::ExitCode> {
+    let arg = std::env::args().nth(1)?;
+    let result = match arg.as_str() {
+        "register" => register::register().map(|places| {
+            for p in places {
+                println!("registered: {p}");
+            }
+        }),
+        "unregister" => register::unregister().map(|_| println!("unregistered")),
+        _ => return None,
+    };
+    Some(match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("raudo-nmhost {arg}: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    })
+}
+
+fn main() -> std::process::ExitCode {
+    if let Some(code) = admin_command() {
+        return code;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
+    match rt.block_on(run_host()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("raudo-nmhost: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run_host() -> std::io::Result<()> {
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     let mut host = Host { client: None };

@@ -13,21 +13,10 @@ OLD_DBUS_SERVICE="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.raudo
 AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/raudo-daemon.desktop"
 HOST_NAME="org.raudo.nmhost"
 CHROME_ID="boloeecmdjhgdkcahinhhpakjhiljbhi"
-FIREFOX_ID="raudo@raudo.org"
 
-# Chromium-family config dirs; a manifest is written only where the browser exists.
-CHROMIUM_DIRS=(
-    "$HOME/.config/google-chrome"
-    "$HOME/.config/google-chrome-beta"
-    "$HOME/.config/chromium"
-    "$HOME/.config/BraveSoftware/Brave-Browser"
-    "$HOME/.config/microsoft-edge"
-    "$HOME/.config/vivaldi"
-)
-# Firefox reads user native manifests from ~/.mozilla even when its profile uses the
-# XDG layout (~/.config/mozilla/firefox); verified on Firefox 158. A ~/.mozilla
-# without a firefox/ subdirectory does not move the profile back to the legacy layout.
-FIREFOX_NM_DIR="$HOME/.mozilla/native-messaging-hosts"
+# Regular browsers are registered by `raudo-nmhost register`. Firefox reads user
+# manifests from ~/.mozilla even when its profile uses the XDG layout
+# (~/.config/mozilla/firefox); verified on Firefox 158.
 # Stale location written by earlier versions of this script.
 OLD_FIREFOX_NM_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/native-messaging-hosts"
 
@@ -59,9 +48,9 @@ uninstall() {
             flatpak override --user --no-talk-name=org.raudo.Manager "$app" 2>/dev/null || true
         fi
     done
+    [[ -x "$BIN/raudo-nmhost" ]] && "$BIN/raudo-nmhost" unregister >/dev/null
     rm -f "$BIN/raudo-daemon" "$BIN/raudo-cli" "$BIN/raudo-nmhost" "$OLD_DBUS_SERVICE" "$AUTOSTART"
-    for d in "${CHROMIUM_DIRS[@]}"; do rm -f "$d/NativeMessagingHosts/$HOST_NAME.json"; done
-    rm -f "$FIREFOX_NM_DIR/$HOST_NAME.json" "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
+    rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
     echo "raudo removed (downloads database in ${XDG_DATA_HOME:-$HOME/.local/share}/raudo kept)."
 }
 
@@ -98,35 +87,10 @@ X-GNOME-Autostart-enabled=true
 EOF
 
 echo "==> Native Messaging manifests"
-for d in "${CHROMIUM_DIRS[@]}"; do
-    [[ -d "$d" ]] || continue
-    mkdir -p "$d/NativeMessagingHosts"
-    cat > "$d/NativeMessagingHosts/$HOST_NAME.json" <<EOF
-{
-  "name": "$HOST_NAME",
-  "description": "raudo download manager",
-  "path": "$BIN/raudo-nmhost",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://$CHROME_ID/"]
-}
-EOF
-    echo "    $d"
-done
 rm -f "$OLD_FIREFOX_NM_DIR/$HOST_NAME.json"
 rmdir "$OLD_FIREFOX_NM_DIR" 2>/dev/null || true
-if command -v firefox >/dev/null || [[ -d "$HOME/.mozilla" || -d "${XDG_CONFIG_HOME:-$HOME/.config}/mozilla" ]]; then
-    mkdir -p "$FIREFOX_NM_DIR"
-    cat > "$FIREFOX_NM_DIR/$HOST_NAME.json" <<EOF
-{
-  "name": "$HOST_NAME",
-  "description": "raudo download manager",
-  "path": "$BIN/raudo-nmhost",
-  "type": "stdio",
-  "allowed_extensions": ["$FIREFOX_ID"]
-}
-EOF
-    echo "    $FIREFOX_NM_DIR"
-fi
+# Same code the Windows installer uses (there it writes the registry).
+"$BIN/raudo-nmhost" register | sed 's/^registered: /    /'
 
 flatpak_apps=()
 for entry in "${FLATPAK_CHROMIUM[@]}"; do
