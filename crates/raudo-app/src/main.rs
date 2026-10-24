@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod browsers;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -153,6 +155,27 @@ fn autostart_enabled(app: AppHandle) -> bool {
 fn set_autostart(app: AppHandle, enabled: bool) -> CmdResult<()> {
     let launcher = app.autolaunch();
     if enabled { launcher.enable() } else { launcher.disable() }.map_err(|e| e.to_string())
+}
+
+fn xpi(app: &AppHandle) -> Option<PathBuf> {
+    browsers::find_xpi(app.path().resource_dir().ok())
+}
+
+/// The raudo extension in each browser: installed or not, and installable.
+#[tauri::command]
+async fn web_extensions(app: AppHandle) -> Vec<browsers::WebExtension> {
+    // Reads several profile folders: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || browsers::list(xpi(&app).as_deref()))
+        .await
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn install_extension(app: AppHandle, browser: String) -> CmdResult<()> {
+    match browser.as_str() {
+        "firefox" => browsers::install_firefox(&xpi(&app).ok_or("No se encuentra el fichero de la extensión")?),
+        _ => Err("La extensión para este navegador todavía no está publicada".into()),
+    }
 }
 
 /// Whether this window's process runs the downloads (false: raudo-daemon does).
@@ -308,7 +331,9 @@ fn main() {
             reveal,
             autostart_enabled,
             set_autostart,
-            owns_service
+            owns_service,
+            web_extensions,
+            install_extension
         ])
         .run(tauri::generate_context!())
         .expect("raudo failed to start");

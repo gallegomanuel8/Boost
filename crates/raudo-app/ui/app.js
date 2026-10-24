@@ -99,7 +99,10 @@ function displayName(d) {
 // -------------------------------------------------------------------- state
 
 const downloads = new Map();
-let selected = null;
+// Selected downloads; `focus` is the last one clicked: shown in the details
+// panel and the anchor of Shift+click ranges.
+const selected = new Set();
+let focus = null;
 let category = "all";
 let query = "";
 let settings = { speed_limit_kib: 0, max_concurrent: 3, download_dir: "" };
@@ -107,6 +110,8 @@ let ownsService = true;
 
 const STATUS = { downloading: "Descargando", queued: "En cola", paused: "En pausa", completed: "Completada", error: "Error" };
 const ACTIVE = ["downloading", "queued", "paused"];
+const CAN_RESUME = ["paused", "error"];
+const CAN_PAUSE = ["downloading", "queued"];
 
 const CATEGORIES = [
   { heading: "Estado" },
@@ -120,6 +125,41 @@ const CATEGORIES = [
   { key: "prog", label: "Programas y archivos", test: (d) => kindOf(d) === "prog" },
   { key: "doc", label: "Documentos", test: (d) => kindOf(d) === "doc" },
 ];
+
+function selection() {
+  return [...selected].map((id) => downloads.get(id)).filter(Boolean);
+}
+
+function selectOnly(id) {
+  selected.clear();
+  if (id != null) selected.add(id);
+  focus = id;
+}
+
+/// Click on a row: plain = only this one, Ctrl = toggle, Shift = range from `focus`.
+function clickRow(e, id) {
+  if (e.shiftKey && focus != null) {
+    const list = visible().map((d) => d.id);
+    const a = list.indexOf(focus), b = list.indexOf(id);
+    if (a >= 0 && b >= 0) {
+      if (!e.ctrlKey && !e.metaKey) selected.clear();
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) selected.add(list[i]);
+    } else selectOnly(id);
+  } else if (e.ctrlKey || e.metaKey) {
+    if (selected.has(id)) selected.delete(id); else selected.add(id);
+    focus = selected.has(id) ? id : [...selected].pop() ?? null;
+  } else {
+    selectOnly(id);
+  }
+  render();
+  refreshDetails();
+}
+
+function forget(id) {
+  downloads.delete(id);
+  selected.delete(id);
+  if (focus === id) focus = [...selected].pop() ?? null;
+}
 
 // ------------------------------------------------------------------- render
 
@@ -183,9 +223,15 @@ function rowFor(d) {
     active && d.connections > 1 ? `${d.connections} conexiones` : null].filter(Boolean).join(" · ");
   const pctText = d.status === "error" ? "—" : p != null ? nf1.format(p) + " %" : d.downloaded ? bytes(d.downloaded) : "";
   return el("button", {
-    type: "button", role: "row", class: "row", "aria-selected": d.id === selected ? "true" : "false",
-    onclick: () => { selected = d.id; render(); refreshDetails(); },
+    type: "button", role: "row", class: "row", "aria-selected": selected.has(d.id) ? "true" : "false",
+    onclick: (e) => clickRow(e, d.id),
     ondblclick: () => reveal(d.id),
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      // Right-click outside the selection acts on that row alone, as in file managers.
+      if (!selected.has(d.id)) { selectOnly(d.id); render(); refreshDetails(); }
+      openMenu(e.clientX, e.clientY);
+    },
   },
     el("span", { role: "cell", class: "cell-name" },
       el("span", { class: `kind ${kind}` }, (ext || kind).slice(0, 4).toUpperCase()),
@@ -195,7 +241,7 @@ function rowFor(d) {
     el("span", { role: "cell", class: "muted num" }, d.size ? bytes(d.size) : d.status === "completed" ? bytes(d.downloaded) : "—"),
     el("span", { role: "cell", class: "prog" },
       el("span", { class: "small num" }, pctText),
-      el("span", { class: `bar ${d.status}` }, el("span", { style: `width: ${p ?? (active ? 0 : 0)}%` }))),
+      el("span", { class: `bar ${d.status}` }, el("span", { style: `width: ${p ?? 0}%` }))),
     el("span", { role: "cell", class: "num" }, active && d.speed > 0 ? bytes(d.speed) + "/s" : ""),
     el("span", { role: "cell", class: "muted num" }, left),
     el("span", { role: "cell", class: `st ${d.status}` }, STATUS[d.status] || d.status),
@@ -208,19 +254,23 @@ function renderRows() {
   $("empty").hidden = rows.length > 0;
 }
 
-// Segments of the selected download, refreshed while it is shown.
+// Segments of the focused download, refreshed while it is shown.
 let detail = null;
 
 function renderDetails() {
-  const d = downloads.get(selected);
-  $("details").hidden = !d;
+  const sel = selection();
+  $("details").hidden = sel.length === 0;
+  if (sel.length > 1) return renderMultiDetails(sel);
+  const d = downloads.get(focus) || sel[0];
   if (!d) return;
   $("d-name").textContent = displayName(d);
   $("d-url").textContent = d.url;
   $("d-url").title = d.url;
+  $("d-folder").hidden = false;
   $("d-folder").textContent = "Carpeta: " + d.dir;
   $("d-error").hidden = d.status !== "error";
   $("d-error").textContent = d.error ? explain(d.error) : "";
+  $("btn-reveal").hidden = false;
 
   const p = pct(d);
   let conn = STATUS[d.status];
@@ -249,6 +299,29 @@ function renderDetails() {
   }
 }
 
+/// Several downloads selected: totals instead of one download's details.
+function renderMultiDetails(sel) {
+  $("d-name").textContent = `${sel.length} descargas seleccionadas`;
+  const counts = Object.entries(STATUS)
+    .map(([k, label]) => [label, sel.filter((d) => d.status === k).length])
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => `${n} ${label.toLowerCase()}`);
+  $("d-url").textContent = counts.join(" · ");
+  $("d-url").title = "";
+  $("d-folder").hidden = true;
+  $("d-error").hidden = true;
+  $("btn-reveal").hidden = true;
+  const known = sel.filter((d) => d.size);
+  const size = known.reduce((s, d) => s + d.size, 0);
+  const done = known.reduce((s, d) => s + (d.status === "completed" ? d.size : Math.min(d.downloaded, d.size)), 0);
+  const speed = sel.reduce((s, d) => s + (d.status === "downloading" ? d.speed || 0 : 0), 0);
+  $("d-conn").textContent = (size ? `${bytes(done)} de ${bytes(size)}` : "Tamaño desconocido") +
+    (speed > 0 ? ` · ${bytes(speed)}/s` : "");
+  const map = $("d-map");
+  map.className = "segmap";
+  map.replaceChildren(el("span", { style: "left: 0; width: 100%" }, el("span", { style: `width: ${size ? (done / size) * 100 : 0}%` })));
+}
+
 // Same wording as the browser popup for the usual failures.
 function explain(err) {
   if (/403|forbidden/i.test(err)) return "El servidor denegó el acceso (el enlace puede haber caducado). Recarga la página y vuelve a descargar.";
@@ -271,11 +344,11 @@ function renderFooter() {
 }
 
 function renderToolbar() {
-  const d = downloads.get(selected);
-  $("btn-resume").disabled = !d || !["paused", "error"].includes(d.status);
-  $("btn-pause").disabled = !d || !["downloading", "queued"].includes(d.status);
-  $("btn-remove").disabled = !d;
-  const anyRunning = [...downloads.values()].some((x) => x.status === "downloading" || x.status === "queued");
+  const sel = selection();
+  $("btn-resume").disabled = !sel.some((d) => CAN_RESUME.includes(d.status));
+  $("btn-pause").disabled = !sel.some((d) => CAN_PAUSE.includes(d.status));
+  $("btn-remove").disabled = sel.length === 0;
+  const anyRunning = [...downloads.values()].some((x) => CAN_PAUSE.includes(x.status));
   const anyPaused = [...downloads.values()].some((x) => x.status === "paused");
   const btn = $("btn-pause-all");
   btn.textContent = anyRunning || !anyPaused ? "Pausar todas" : "Reanudar todas";
@@ -288,22 +361,31 @@ async function reload() {
   const list = await call("list");
   downloads.clear();
   for (const d of list) downloads.set(d.id, d);
-  if (selected != null && !downloads.has(selected)) selected = null;
+  for (const id of [...selected]) if (!downloads.has(id)) selected.delete(id);
+  if (focus != null && !downloads.has(focus)) focus = [...selected].pop() ?? null;
   render();
 }
 
 async function refreshDetails() {
-  const d = downloads.get(selected);
+  const d = selected.size === 1 ? downloads.get(focus) : null;
   if (!d) { detail = null; return; }
   try {
     detail = await call("details", { id: d.id });
-    downloads.set(d.id, { ...d, ...detail.info });
+    downloads.set(d.id, { ...downloads.get(d.id), ...detail.info });
     render();
   } catch { /* the list still shows it */ }
 }
 
 async function reveal(id) {
   try { await call("reveal", { id }); } catch (e) { toast("No se puede abrir la carpeta: " + e); }
+}
+
+/// Runs `cmd` on every selected download it applies to; reports the failures together.
+async function forSelection(cmd, statuses) {
+  const targets = selection().filter((d) => statuses.includes(d.status));
+  const failed = [];
+  await Promise.all(targets.map((d) => call(cmd, { id: d.id }).catch((e) => failed.push(`${displayName(d)}: ${e}`))));
+  if (failed.length) toast(failed.join("\n"));
 }
 
 async function act(fn) {
@@ -313,42 +395,81 @@ async function act(fn) {
 // ------------------------------------------------------------ main actions
 
 $("search").addEventListener("input", (e) => { query = e.target.value; render(); });
-$("btn-resume").onclick = () => act(() => call("resume", { id: selected }));
-$("btn-pause").onclick = () => act(() => call("pause", { id: selected }));
-$("btn-reveal").onclick = () => selected != null && reveal(selected);
+$("btn-resume").onclick = () => forSelection("resume", CAN_RESUME);
+$("btn-pause").onclick = () => forSelection("pause", CAN_PAUSE);
+$("btn-reveal").onclick = () => focus != null && reveal(focus);
 $("btn-pause-all").onclick = () => act(() => call($("btn-pause-all").textContent.startsWith("Pausar") ? "pause_all" : "resume_all"));
 
+let removing = [];
 $("btn-remove").onclick = () => {
-  const d = downloads.get(selected);
-  if (!d) return;
-  $("rm-text").textContent = `«${displayName(d)}» se quitará de la lista.`;
+  removing = selection();
+  if (!removing.length) return;
+  $("rm-title").textContent = removing.length === 1 ? "Eliminar descarga" : `Eliminar ${removing.length} descargas`;
+  $("rm-text").textContent = removing.length === 1
+    ? `«${displayName(removing[0])}» se quitará de la lista.`
+    : `Las ${removing.length} descargas seleccionadas se quitarán de la lista.`;
   $("rm-file").checked = false;
-  $("rm-file").parentElement.hidden = d.status !== "completed";
+  $("rm-file").parentElement.hidden = !removing.some((d) => d.status === "completed");
   $("dlg-remove").returnValue = "";
   $("dlg-remove").showModal();
 };
 $("dlg-remove").addEventListener("close", () => {
-  if ($("dlg-remove").returnValue === "cancel" || $("dlg-remove").returnValue === "") return;
-  const id = selected;
+  if ($("dlg-remove").returnValue !== "ok") return;
+  const deleteFile = $("rm-file").checked;
+  const failed = [];
   act(async () => {
-    await call("remove", { id, deleteFile: $("rm-file").checked });
-    downloads.delete(id);
-    if (selected === id) selected = null;
+    await Promise.all(removing.map((d) =>
+      call("remove", { id: d.id, deleteFile: deleteFile && d.status === "completed" })
+        .then(() => forget(d.id))
+        .catch((e) => failed.push(`${displayName(d)}: ${e}`))));
+    removing = [];
+    if (failed.length) toast(failed.join("\n"));
     render();
   });
 });
 $("rm-go").value = "ok";
 
+// Context menu of the rows: acts on the selection.
+const menu = $("ctx");
+function openMenu(x, y) {
+  const sel = selection();
+  $("ctx-resume").disabled = !sel.some((d) => CAN_RESUME.includes(d.status));
+  $("ctx-pause").disabled = !sel.some((d) => CAN_PAUSE.includes(d.status));
+  $("ctx-reveal").disabled = sel.length !== 1;
+  $("ctx-remove").textContent = sel.length > 1 ? `Eliminar ${sel.length} descargas…` : "Eliminar…";
+  menu.hidden = false;
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.min(x, innerWidth - r.width - 4) + "px";
+  menu.style.top = Math.min(y, innerHeight - r.height - 4) + "px";
+  menu.querySelector("button:not(:disabled)")?.focus();
+}
+function closeMenu() { menu.hidden = true; }
+$("ctx-resume").onclick = () => { closeMenu(); forSelection("resume", CAN_RESUME); };
+$("ctx-pause").onclick = () => { closeMenu(); forSelection("pause", CAN_PAUSE); };
+$("ctx-reveal").onclick = () => { closeMenu(); if (focus != null) reveal(focus); };
+$("ctx-remove").onclick = () => { closeMenu(); $("btn-remove").click(); };
+document.addEventListener("mousedown", (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+window.addEventListener("blur", closeMenu);
+$("rows").parentElement.parentElement.addEventListener("scroll", closeMenu);
+// No browser menu (reload, inspect…) outside text fields.
+document.addEventListener("contextmenu", (e) => { if (!e.target.matches("input, textarea")) e.preventDefault(); });
+
 document.addEventListener("keydown", (e) => {
+  if (!menu.hidden && e.key === "Escape") { closeMenu(); return; }
   if (document.querySelector("dialog[open]") || e.target.matches("input, select")) return;
-  if (e.key === "Delete" && selected != null) $("btn-remove").click();
+  if (e.key === "Delete" && selected.size) $("btn-remove").click();
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") { e.preventDefault(); openAdd(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+    e.preventDefault();
+    for (const d of visible()) selected.add(d.id);
+    render();
+  }
   if ((e.key === "ArrowDown" || e.key === "ArrowUp") && visible().length) {
     e.preventDefault();
     const list = visible();
-    const i = list.findIndex((d) => d.id === selected);
+    const i = list.findIndex((d) => d.id === focus);
     const next = list[Math.max(0, Math.min(list.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    selected = next.id;
+    if (e.shiftKey) { selected.add(next.id); focus = next.id; } else selectOnly(next.id);
     render();
     refreshDetails();
   }
@@ -510,7 +631,7 @@ async function submitAdd(paused) {
   try {
     const id = await call("add", { download });
     $("dlg-add").close("ok");
-    selected = id;
+    selectOnly(id);
     await reload();
   } catch (e) { toast("No se pudo añadir: " + e); }
 }
@@ -522,7 +643,42 @@ $("add-later").onclick = () => submitAdd(true);
 function showTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-current", String(b.dataset.tab === name));
   for (const s of document.querySelectorAll("[data-panel]")) s.hidden = s.dataset.panel !== name;
+  if (name === "browsers") loadExtensions();
 }
+
+// ----------------------------------------------------------- web extensions
+
+async function loadExtensions() {
+  let list;
+  try { list = await call("web_extensions"); } catch (e) { toast(String(e)); return; }
+  $("ext-list").replaceChildren(...list.map((x) => {
+    const state = x.installed ? "Extensión instalada"
+      : !x.present ? "No se ha encontrado este navegador"
+      : x.available ? "Extensión no instalada"
+      : "Extensión no instalada · aún no publicada";
+    return el("div", { role: "row", class: "ext-row" },
+      el("span", { role: "cell" }, el("span", { class: "strong" }, x.name), el("span", { class: "muted small" }, state)),
+      el("span", { role: "cell" }, el("button", {
+        type: "button",
+        class: x.installed ? "btn done" : "btn primary",
+        disabled: x.installed,
+        onclick: () => installExtension(x),
+      }, x.installed ? "Instalada" : "Instalar extensión")));
+  }));
+}
+
+async function installExtension(x) {
+  if (!x.available) { toast(`La extensión para ${x.name} todavía no está publicada.`); return; }
+  try {
+    await call("install_extension", { browser: x.browser });
+    toast(`${x.name} pedirá confirmación para añadir la extensión.`);
+  } catch (e) { toast(String(e)); }
+}
+
+// Picks up an installation made in the browser while the tab is open.
+setInterval(() => {
+  if ($("dlg-settings").open && !document.querySelector('[data-panel="browsers"]').hidden) loadExtensions();
+}, 3000);
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 
 $("st-autostart").onclick = (e) => {
@@ -573,17 +729,16 @@ listen("raudo-event", ({ payload }) => {
     const info = payload.info;
     const prev = downloads.get(info.id);
     downloads.set(info.id, info);
-    if (info.id === selected && (!prev || prev.status !== info.status)) refreshDetails();
+    if (info.id === focus && (!prev || prev.status !== info.status)) refreshDetails();
   } else if (payload.event === "removed") {
-    downloads.delete(payload.id);
-    if (selected === payload.id) selected = null;
+    forget(payload.id);
   }
   render();
 });
 
-// Segment map of the selected download, and a periodic resync in case an event was missed.
+// Segment map of the focused download, and a periodic resync in case an event was missed.
 setInterval(() => {
-  const d = downloads.get(selected);
+  const d = selected.size === 1 && downloads.get(focus);
   if (d && d.status === "downloading") refreshDetails();
 }, 1000);
 setInterval(() => reload().catch(() => {}), 10000);

@@ -205,3 +205,25 @@ input[type=url], input[type=text], input[type=number], select {
   .search { max-width: none; }
   .tabs { width: 130px; }
 }
+
+/* context menu */
+.ctx {
+  position: fixed; z-index: 10; min-width: 200px; padding: 4px; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 6px 24px rgb(0 0 0 / .25);
+}
+.ctx button { min-height: 32px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; text-align: left; }
+.ctx button:hover:not(:disabled), .ctx button:focus-visible { background: var(--hover); outline: 0; }
+.ctx hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
+.ctx .danger-item { color: var(--err); }
+
+/* web extensions */
+.ext-list { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.ext-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  min-height: 52px; padding: 6px 14px; border-bottom: 1px solid var(--line);
+}
+.ext-row:last-child { border-bottom: 0; }
+.ext-row > span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.ext-row .btn { min-width: 150px; justify-content: center; }
+.ext-row .btn.done { background: var(--track); border-color: var(--track); color: var(--muted); opacity: 1; }
+code { white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12px; padding: 1px 4px; border-radius: 4px; background: var(--bg); }
