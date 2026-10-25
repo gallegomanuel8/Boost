@@ -8,9 +8,10 @@ explica qué datos usa la extensión y qué hace con ellos.
 
 ## Resumen
 
-**Boost no recoge, no envía a ningún servidor y no comparte ningún dato personal.** Todo lo
-que la extensión ve se queda en tu ordenador: solo se comunica con la aplicación Boost
-instalada en el mismo equipo.
+**Boost no recoge, no envía a ningún servidor propio y no comparte ningún dato personal.**
+Todo lo que la extensión ve se queda en tu ordenador: solo se comunica con la aplicación
+Boost instalada en el mismo equipo. La única consulta a un servicio externo es la búsqueda
+de la portada de las canciones que descargas en MP3 (ver más abajo).
 
 ## Qué datos usa la extensión y para qué
 
@@ -44,8 +45,19 @@ fichero desde su servidor original y no los transmite a nadie más.
 - No ejecuta código descargado de internet: todo el código va dentro de la extensión.
 - No lee el contenido de tus formularios, contraseñas ni mensajes.
 
-Las únicas conexiones a internet son las descargas que tú pides, hacia el servidor donde
-está cada fichero.
+## Portadas de los MP3
+
+Cuando descargas el audio de una canción en MP3, la aplicación busca la canción en
+[MusicBrainz](https://musicbrainz.org), una enciclopedia musical libre, para ponerle la
+portada del álbum y las etiquetas (título, artista, álbum y año). Para ello envía a
+`musicbrainz.org` **solo el título de la canción y el nombre del artista**, sacados del
+título del vídeo, y descarga la portada de `coverartarchive.org`. No se envía la dirección
+de la página ni datos de tu cuenta; como en cualquier conexión, esos servidores ven tu
+dirección IP y que la petición viene de Boost (con su número de versión). Puedes consultar
+la [política de privacidad de MetaBrainz](https://metabrainz.org/privacy).
+
+Aparte de eso, las únicas conexiones a internet son las descargas que tú pides, hacia el
+servidor donde está cada fichero.
 
 ## Contacto
 
@@ -58,7 +70,7 @@ Para dudas sobre esta política, abre una incidencia en
 
 *Last updated: October 25, 2026*
 
-**Boost does not collect, transmit to any server or share any personal data.** The browser
+**Boost does not collect, transmit to any server of its own or share any personal data.** The browser
 extension reads, on your computer only, the active tab's address and title, the addresses of
 media and downloads in the page, and the cookies, referer and user agent for those addresses.
 It passes them exclusively to the Boost desktop application on the same computer, through
@@ -66,7 +78,9 @@ the browser's Native Messaging, so that the application can download the file fr
 original server. The application keeps a local download history that you can delete.
 
 Boost uses no servers of its own, no analytics, advertising or tracking, does not sell or
-share data, and runs no remote code. The only internet connections are the downloads you
-request, to the server that hosts each file.
+share data, and runs no remote code. Besides the downloads you request, the only internet
+connection is the album-art lookup for songs downloaded as MP3: the application sends only
+the song title and artist name to musicbrainz.org and fetches the cover from
+coverartarchive.org ([MetaBrainz privacy policy](https://metabrainz.org/privacy)).
 
 Questions: <https://github.com/gallegomanuel8/Boost/issues>.
