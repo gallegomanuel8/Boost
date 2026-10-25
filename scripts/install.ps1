@@ -41,3 +41,15 @@ $lnk.Save()
 
 Write-Host "Boost instalado en $Dest"
 Write-Host "Abrelo desde el menu Inicio. Extension para Chrome/Edge/Brave: carga descomprimida desde $Dest\extension"
+
+# Firefox installs the signed add-on after asking the user; offer it now.
+$AppPath = "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe"
+$Firefox = (Get-ItemProperty "HKCU:\$AppPath" -ErrorAction SilentlyContinue).'(default)'
+if (-not $Firefox) { $Firefox = (Get-ItemProperty "HKLM:\$AppPath" -ErrorAction SilentlyContinue).'(default)' }
+if ($Firefox -and (Test-Path $Firefox) -and (Test-Path "$Dest\boost.xpi")) {
+    $answer = Read-Host "Instalar ahora la extension en Firefox? [S/n]"
+    if ($answer -notmatch '^[nN]') {
+        Start-Process $Firefox -ArgumentList "`"$Dest\boost.xpi`""
+        Write-Host "Firefox te pedira confirmacion: pulsa Anadir."
+    }
+}

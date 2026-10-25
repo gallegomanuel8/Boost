@@ -1,7 +1,8 @@
-; Windows installer for Boost (Inno Setup 6), built by scripts/package-windows.ps1.
+﻿; Windows installer for Boost (Inno Setup 6), built by scripts/package-windows.ps1.
 ; Installs for the current user only, without administrator rights, in the same
 ; place as install.ps1: %LOCALAPPDATA%\Programs\Boost.
 ;   ISCC /DAppVersion=<version> /DStage=<folder with the files> /DOutDir=<dist> boost.iss
+; Keep this file UTF-8 with BOM: without it ISCC misreads the accented texts.
 
 #ifndef AppVersion
   #error Pass /DAppVersion=<version>
@@ -46,6 +47,16 @@ RestartApplications=no
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
+[CustomMessages]
+es.InstallFirefoxExt=Instalar la extensión en Firefox
+en.InstallFirefoxExt=Install the Firefox extension
+es.OpenChromiumExt=Abrir la carpeta de la extensión para Chrome, Edge y Brave
+en.OpenChromiumExt=Open the extension folder for Chrome, Edge and Brave
+
+[Messages]
+es.FinishedLabel=Boost se ha instalado.%n%nFirefox te pedirá confirmación para añadir la extensión.%n%nChrome, Edge y Brave solo instalan extensiones de su tienda: abre la página de extensiones del navegador, activa el «Modo de desarrollador», pulsa «Cargar descomprimida» y elige la carpeta de la extensión. Boost te guía en Preferencias → Extensiones web.
+en.FinishedLabel=Boost has been installed.%n%nFirefox will ask you to confirm adding the extension.%n%nChrome, Edge and Brave only install extensions from their store: open the browser's extensions page, turn on "Developer mode", click "Load unpacked" and choose the extension folder. Boost guides you in Preferencias → Extensiones web.
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
@@ -71,6 +82,10 @@ Name: "{userdesktop}\Boost"; Filename: "{app}\boost.exe"; WorkingDir: "{app}"; C
 ; Browsers find the host, and the boost:// link opens the app.
 Filename: "{app}\raudo-nmhost.exe"; Parameters: "register"; Flags: runhidden waituntilterminated; StatusMsg: "Registrando Boost en los navegadores..."
 Filename: "{app}\boost.exe"; Description: "{cm:LaunchProgram,Boost}"; Flags: nowait postinstall skipifsilent
+; Firefox opens the signed add-on and asks the user to add it.
+Filename: "{code:FirefoxExe}"; Parameters: """{app}\boost.xpi"""; Description: "{cm:InstallFirefoxExt}"; Flags: nowait postinstall skipifsilent; Check: CanInstallFirefoxExt
+; Chromium browsers load it by hand from this folder (developer mode → Load unpacked).
+Filename: "{app}\extension"; Description: "{cm:OpenChromiumExt}"; Flags: postinstall shellexec nowait skipifsilent unchecked
 
 [UninstallRun]
 Filename: "{app}\raudo-nmhost.exe"; Parameters: "unregister"; Flags: runhidden waituntilterminated; RunOnceId: "UnregisterHost"
@@ -89,6 +104,22 @@ var
 begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM boost.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM raudo-nmhost.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+// Firefox registers its path under App Paths (per user or for all users).
+function FirefoxExe(Param: String): String;
+begin
+  if not RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe', '', Result) then
+    if not RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe', '', Result) then
+      Result := '';
+end;
+
+function CanInstallFirefoxExt: Boolean;
+var
+  Exe: String;
+begin
+  Exe := FirefoxExe('');
+  Result := (Exe <> '') and FileExists(Exe) and FileExists(ExpandConstant('{app}\boost.xpi'));
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

@@ -1,5 +1,10 @@
 # Publicar la extensión en las tiendas
 
+> **Decisión actual:** la extensión se publica solo en Firefox (AMO). Para Chrome, Brave y
+> Edge se instala a mano desde la carpeta que deja el instalador (Boost guía el proceso en
+> *Preferencias → Extensiones web*). Lo demás de esta guía queda para si se publica más
+> adelante en esas tiendas.
+
 Guía para subir la extensión de Boost a:
 
 | Tienda | Navegadores | Coste | Revisión habitual |

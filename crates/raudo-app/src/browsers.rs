@@ -25,8 +25,12 @@ pub struct WebExtension {
     pub installed: bool,
     /// Only the pre-Boost extension is installed (Firefox).
     pub outdated: bool,
-    /// raudo can install it (only Firefox for now: the signed .xpi).
+    /// Boost can help install it: the signed .xpi for Firefox, the unpacked
+    /// extension folder for Chromium browsers.
     pub available: bool,
+    /// Chromium: the folder to choose in "Load unpacked" (the extension's own
+    /// copy for Flatpak browsers, which cannot read the rest of the home folder).
+    pub folder: Option<PathBuf>,
 }
 
 struct Chromium {
@@ -59,19 +63,39 @@ pub fn list(xpi: Option<&Path>) -> Vec<WebExtension> {
         installed,
         outdated: !installed && has(OLD_FIREFOX_ID),
         available: xpi.is_some(),
+        folder: None,
     }];
     for c in CHROMIUM {
         let roots = chromium_roots(c);
+        let folder = chromium_extension_folder(c);
         out.push(WebExtension {
             browser: c.browser,
             name: c.name,
             present: roots.iter().any(|r| r.is_dir()),
             installed: roots.iter().flat_map(|r| subdirs(r)).any(|p| chromium_profile_has_raudo(&p)),
             outdated: false,
-            available: false,
+            available: folder.is_some(),
+            folder,
         });
     }
     out
+}
+
+/// Where the installer left the unpacked extension for this browser.
+fn chromium_extension_folder(c: &Chromium) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if cfg!(windows) {
+        // %LOCALAPPDATA%\Programs\Boost\extension, next to boost.exe.
+        candidates.extend(std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("extension"))));
+    } else {
+        let native = dirs::config_dir().is_some_and(|d| d.join(c.linux).is_dir());
+        let flatpak = dirs::home_dir().map(|h| h.join(".var/app").join(c.flatpak));
+        if !native {
+            candidates.extend(flatpak.map(|f| f.join("data/raudo/extension")));
+        }
+        candidates.extend(dirs::data_dir().map(|d| d.join("boost/extension")));
+    }
+    candidates.into_iter().find(|p| p.join("manifest.json").is_file())
 }
 
 fn subdirs(dir: &Path) -> Vec<PathBuf> {

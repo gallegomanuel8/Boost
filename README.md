@@ -123,10 +123,14 @@ como YouTube y para convertir a MP3, Boost usa estos programas si están instala
 
 La extensión envía a Boost las descargas y los vídeos que detecta en cada página.
 
-- **Firefox:** en Boost, *Preferencias → Extensiones web → Instalar extensión*. También
-  puedes abrir con Firefox el fichero `boost.xpi` del paquete.
-- **Chrome, Brave, Edge, Vivaldi:** abre `chrome://extensions`, activa el *Modo de
-  desarrollador*, pulsa *Cargar descomprimida* y elige la carpeta de la extensión:
+- **Firefox:** el instalador ofrece añadirla al terminar (Firefox pide confirmación). Si
+  no lo hiciste, en Boost: *Preferencias → Extensiones web → Instalar extensión*, o abre
+  con Firefox el fichero `boost.xpi` del paquete.
+- **Chrome, Brave, Edge, Vivaldi:** estos navegadores solo instalan solos las extensiones
+  de su tienda, así que se añade a mano una vez. En Boost, *Preferencias → Extensiones web
+  → Instalar extensión* abre la carpeta y te guía. A mano: abre `chrome://extensions`
+  (`brave://extensions`, `edge://extensions`), activa el *Modo de desarrollador*, pulsa
+  *Cargar descomprimida* y elige la carpeta de la extensión, que no debes borrar:
   - Linux: `~/.local/share/boost/extension` (en navegadores Flatpak, la carpeta que indica
     el instalador, dentro de `~/.var/app/…`).
   - Windows: `%LOCALAPPDATA%\Programs\Boost\extension`.

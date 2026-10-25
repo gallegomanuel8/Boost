@@ -192,6 +192,25 @@
   </form>
 </dialog>
 
+<!-- Manual install of the extension in Chromium browsers -->
+<dialog id="dlg-ext" class="dlg small-dlg" aria-labelledby="ext-title">
+  <form method="dialog">
+    <div class="dlg-head"><h1 id="ext-title">Instalar la extensión</h1><button type="button" class="icon-btn" data-close aria-label="Cerrar">✕</button></div>
+    <div class="dlg-body">
+      <p class="muted small">Estos navegadores solo instalan extensiones de su tienda, así que Boost se añade a mano una vez:</p>
+      <ol class="steps">
+        <li>Abre <code id="ext-url"></code> en <span id="ext-browser"></span>
+          <button type="button" class="btn" id="ext-copy">Copiar</button></li>
+        <li>Activa el <b>Modo de desarrollador</b> (arriba a la derecha).</li>
+        <li>Pulsa <b>Cargar descomprimida</b> y elige esta carpeta, que ya se ha abierto:
+          <code id="ext-folder" class="path"></code></li>
+      </ol>
+      <p class="muted small">No borres ni muevas esa carpeta: el navegador carga la extensión desde ella.</p>
+    </div>
+    <div class="dlg-foot"><button type="submit" class="btn primary">Hecho</button></div>
+  </form>
+</dialog>
+
 <div id="ctx" class="ctx" role="menu" aria-label="Acciones" hidden>
   <button type="button" role="menuitem" id="ctx-resume">Reanudar</button>
   <button type="button" role="menuitem" id="ctx-pause">Pausar</button>

@@ -187,12 +187,26 @@ EOF
     done
 fi
 
+# Firefox installs the signed add-on after asking the user; offer it now.
+firefox_has_boost() {
+    compgen -G "$HOME/.mozilla/firefox/*/extensions/boost-downloader@boost.app.xpi" >/dev/null ||
+        compgen -G "${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/firefox/*/extensions/boost-downloader@boost.app.xpi" >/dev/null
+}
+if [[ -t 0 && -f "$SHARE/boost.xpi" ]] && command -v firefox >/dev/null && ! firefox_has_boost; then
+    read -rp "¿Instalar ahora la extensión en Firefox? [S/n] " answer || answer=n
+    if [[ ! "$answer" =~ ^[nN] ]]; then
+        setsid -f firefox "$SHARE/boost.xpi" >/dev/null 2>&1
+        echo "    Firefox te pedirá confirmación: pulsa «Añadir»."
+    fi
+fi
+
 cat <<EOF
 
 Boost instalado. Ábrelo desde el menú de aplicaciones.
 Extensión del navegador:
   Firefox:                Boost → Preferencias → Extensiones web → Instalar extensión
-  Chrome/Brave/Edge:      chrome://extensions → Modo de desarrollador → Cargar descomprimida →
+  Chrome/Brave/Edge:      Boost → Preferencias → Extensiones web, o a mano:
+                          chrome://extensions → Modo de desarrollador → Cargar descomprimida →
                           $SHARE/extension
                           (navegadores Flatpak: la carpeta indicada arriba para cada uno)
 Los navegadores Snap y Firefox en Flatpak todavía no son compatibles.

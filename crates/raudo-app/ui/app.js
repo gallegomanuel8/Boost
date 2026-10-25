@@ -669,7 +669,8 @@ async function loadExtensions() {
       : x.outdated ? "Tienes la extensión antigua (raudo): instala la nueva y quita la antigua"
       : !x.present ? "No se ha encontrado este navegador"
       : x.available ? "Extensión no instalada"
-      : "Extensión no instalada · aún no publicada";
+      : x.browser === "firefox" ? "Extensión no instalada · falta el fichero firmado; reinstala Boost"
+      : "Extensión no instalada · falta su carpeta; reinstala Boost";
     return el("div", { role: "row", class: "ext-row" },
       el("span", { role: "cell" }, el("span", { class: "strong" }, x.name), el("span", { class: "muted small" }, state)),
       el("span", { role: "cell" }, el("button", {
@@ -681,12 +682,28 @@ async function loadExtensions() {
   }));
 }
 
+// Address of the extensions page in each Chromium browser.
+const EXTENSIONS_PAGE = { brave: "brave://extensions", edge: "edge://extensions" };
+
 async function installExtension(x) {
-  if (!x.available) { toast(`La extensión para ${x.name} todavía no está publicada.`); return; }
+  if (!x.available) { toast("No se encuentra la extensión. Vuelve a instalar Boost."); return; }
   try {
     await call("install_extension", { browser: x.browser });
-    toast(`${x.name} pedirá confirmación para añadir la extensión.`);
-  } catch (e) { toast(String(e)); }
+  } catch (e) { toast(String(e)); return; }
+  if (x.browser === "firefox") {
+    toast("Firefox pedirá confirmación para añadir la extensión.");
+    return;
+  }
+  // Chromium: the folder is open; walk the user through "Load unpacked".
+  const url = EXTENSIONS_PAGE[x.browser] || "chrome://extensions";
+  $("ext-title").textContent = `Instalar la extensión en ${x.name}`;
+  $("ext-browser").textContent = x.name;
+  $("ext-url").textContent = url;
+  $("ext-folder").textContent = x.folder;
+  $("ext-copy").onclick = () => navigator.clipboard.writeText(url)
+    .then(() => toast("Copiado: pégalo en la barra de direcciones"))
+    .catch(() => toast(url));
+  $("dlg-ext").showModal();
 }
 
 // Picks up an installation made in the browser while the tab is open.

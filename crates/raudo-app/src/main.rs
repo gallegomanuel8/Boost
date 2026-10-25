@@ -177,10 +177,17 @@ async fn web_extensions(app: AppHandle) -> Vec<browsers::WebExtension> {
 
 #[tauri::command]
 fn install_extension(app: AppHandle, browser: String) -> CmdResult<()> {
-    match browser.as_str() {
-        "firefox" => browsers::install_firefox(&xpi(&app).ok_or("No se encuentra el fichero de la extensión")?),
-        _ => Err("La extensión para este navegador todavía no está publicada".into()),
+    if browser == "firefox" {
+        return browsers::install_firefox(&xpi(&app).ok_or("No se encuentra el fichero de la extensión")?);
     }
+    // Chromium browsers only load it by hand (developer mode → Load unpacked):
+    // open its folder so the user can pick it.
+    let folder = browsers::list(None)
+        .into_iter()
+        .find(|x| x.browser == browser)
+        .and_then(|x| x.folder)
+        .ok_or("No se encuentra la carpeta de la extensión; reinstala Boost")?;
+    app.opener().open_path(folder.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Whether this window's process runs the downloads (false: raudo-daemon does).
