@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- Opened by the Windows installer in Chrome, Edge or Brave (?b=chrome|edge|brave):
+     those browsers refuse their extensions page on the command line and only take
+     extensions from outside their store with "Load unpacked". Lives next to boost.exe;
+     the extension folder is the "extension" folder beside it. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instalar la extensión de Boost</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d2330; --muted: #5d6677; --bg: #f6f7f9; --card: #fff; --line: #dde1e8; --accent: #2f6fde; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e7eaf0; --muted: #9aa3b2; --bg: #15181e; --card: #1f232b; --line: #323844; --accent: #6b9cff; } }
+  body { margin: 0; font: 15px/1.5 "Segoe UI", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  header { display: flex; align-items: center; gap: 12px; }
+  header img { width: 48px; height: 48px; }
+  h1 { font-size: 22px; margin: 0; }
+  p.lead { color: var(--muted); margin: 8px 0 24px; }
+  ol { list-style: none; counter-reset: step; padding: 0; margin: 0; }
+  li { counter-increment: step; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 14px 52px; margin-bottom: 12px; position: relative; }
+  li::before { content: counter(step); position: absolute; left: 16px; top: 14px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; display: grid; place-items: center; }
+  .copy { display: flex; gap: 8px; margin-top: 8px; }
+  code { flex: 1; min-width: 0; overflow-wrap: anywhere; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 13px Consolas, monospace; }
+  button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+  button.done { background: transparent; color: var(--accent); }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="extension/icons/128.png" alt="">
+    <h1 id="title"></h1>
+  </header>
+  <p class="lead" id="lead"></p>
+  <ol>
+    <li><span id="s1"></span>
+      <div class="copy"><code id="page"></code><button data-copy="page"></button></div></li>
+    <li id="s2"></li>
+    <li><span id="s3"></span>
+      <div class="copy"><code id="folder"></code><button data-copy="folder"></button></div>
+      <div class="muted" id="s3b"></div></li>
+  </ol>
+</main>
+<script>
+  const BROWSERS = {
+    chrome: { name: "Chrome", page: "chrome://extensions" },
+    edge: { name: "Edge", page: "edge://extensions" },
+    brave: { name: "Brave", page: "brave://extensions" },
+  };
+  const b = BROWSERS[new URLSearchParams(location.search).get("b")] ?? BROWSERS.chrome;
+  // file:///C:/Users/.../Boost/install-extension.html -> C:\Users\...\Boost\extension
+  const folder = decodeURIComponent(location.pathname).replace(/^\//, "").replace(/[^/]*$/, "extension").replace(/\//g, "\\");
+
+  const T = {
+    es: {
+      title: `Instalar la extensión de Boost en ${b.name}`,
+      lead: `${b.name} solo instala directamente las extensiones de su tienda. La de Boost se añade a mano, una sola vez:`,
+      s1: "Copia esta dirección, pégala en la barra de direcciones y pulsa Intro:",
+      s2: "Activa el «Modo de desarrollador» en esa página.",
+      s3: "Pulsa «Cargar descomprimida» y elige esta carpeta:",
+      s3b: "También puedes arrastrar la carpeta «extension» desde la ventana del Explorador que se ha abierto hasta la página de extensiones.",
+      copy: "Copiar", copied: "Copiado",
+    },
+    en: {
+      title: `Install the Boost extension in ${b.name}`,
+      lead: `${b.name} only installs extensions from its store directly. Boost's is added by hand, once:`,
+      s1: "Copy this address, paste it in the address bar and press Enter:",
+      s2: "Turn on \"Developer mode\" on that page.",
+      s3: "Click \"Load unpacked\" and choose this folder:",
+      s3b: "You can also drag the \"extension\" folder from the Explorer window that opened onto the extensions page.",
+      copy: "Copy", copied: "Copied",
+    },
+  };
+  const t = navigator.language.toLowerCase().startsWith("es") ? T.es : T.en;
+  document.documentElement.lang = t === T.es ? "es" : "en";
+  document.title = t.title;
+  for (const id of ["title", "lead", "s1", "s2", "s3", "s3b"]) document.getElementById(id).textContent = t[id];
+  document.getElementById("page").textContent = b.page;
+  document.getElementById("folder").textContent = folder;
+
+  async function copy(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = Object.assign(document.createElement("textarea"), { value: text });
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+  }
+  for (const btn of document.querySelectorAll("button[data-copy]")) {
+    btn.textContent = t.copy;
+    btn.onclick = async () => {
+      await copy(document.getElementById(btn.dataset.copy).textContent);
+      btn.textContent = t.copied;
+      btn.classList.add("done");
+      setTimeout(() => { btn.textContent = t.copy; btn.classList.remove("done"); }, 1500);
+    };
+  }
+</script>
+</body>
+</html>

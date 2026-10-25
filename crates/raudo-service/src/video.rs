@@ -46,7 +46,7 @@ pub enum VideoOutcome {
 
 /// Where helper programs (yt-dlp, ffmpeg, node) are looked for besides PATH:
 /// next to raudo itself (an installer can bundle them), raudo's own bin folder,
-/// and the per-user locations used on Linux.
+/// winget's links on Windows, and the per-user locations used on Linux.
 fn tool_dirs() -> Vec<PathBuf> {
     let mut dirs_list = Vec::new();
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
@@ -54,12 +54,71 @@ fn tool_dirs() -> Vec<PathBuf> {
     }
     if let Some(d) = dirs::data_local_dir() {
         dirs_list.push(d.join("raudo").join("bin"));
+        // winget links portable programs (yt-dlp, ffmpeg, deno) here when it can.
+        #[cfg(windows)]
+        dirs_list.push(d.join("Microsoft").join("WinGet").join("Links"));
     }
+    #[cfg(windows)]
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        dirs_list.push(PathBuf::from(pf).join("WinGet").join("Links"));
+    }
+    #[cfg(windows)]
+    dirs_list.extend(registry_path());
     if let Some(h) = dirs::home_dir() {
         dirs_list.push(h.join(".local/bin"));
         dirs_list.push(h.join(".local/opt/node/bin"));
     }
     dirs_list
+}
+
+/// PATH as saved now (user, then system). A process keeps the PATH it started
+/// with: programs installed while Boost runs, or by the installer that opened it
+/// (winget adds each package folder when it cannot link it), are only here.
+#[cfg(windows)]
+fn registry_path() -> Vec<PathBuf> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let keys = [
+        (HKEY_CURRENT_USER, "Environment"),
+        (HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    ];
+    keys.iter()
+        .filter_map(|(root, key)| RegKey::predef(*root).open_subkey(key).ok()?.get_value::<String, _>("Path").ok())
+        .flat_map(|path| path.split(';').map(expand_env).collect::<Vec<_>>())
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// `%NAME%` references of a REG_EXPAND_SZ value; unknown ones stay as they are.
+#[cfg(any(windows, test))]
+fn expand_env(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(v) if !name.is_empty() => out.push_str(&v),
+                    _ => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
@@ -101,10 +160,14 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 /// YouTube needs a JavaScript runtime to unlock most formats (without one only
-/// 144p survives). yt-dlp enables only deno by default; fall back to node.
+/// 144p survives). yt-dlp enables only deno by default, found on PATH; fall back
+/// to node.
 fn js_runtime_args() -> Vec<String> {
-    if find_tool("deno").is_some() {
+    if find_in_path("deno").is_some() {
         return Vec::new();
+    }
+    if let Some(p) = find_tool("deno") {
+        return vec!["--js-runtimes".into(), format!("deno:{}", p.display())];
     }
     match find_tool("node") {
         Some(p) => vec!["--js-runtimes".into(), format!("node:{}", p.display())],
@@ -152,6 +215,9 @@ fn context_args(req: &Request) -> Vec<String> {
 
 pub fn download_args(job: &VideoJob) -> Vec<String> {
     let mut a: Vec<String> = [
+        // On Windows a pipe gets the ANSI code page otherwise ("–" as 0x96).
+        "--encoding",
+        "utf-8",
         "--newline",
         "--progress",
         "--no-playlist",
@@ -244,8 +310,11 @@ pub async fn run(
         .spawn()
         .map_err(|e| format!("cannot run yt-dlp: {e}"))?;
 
-    let mut stdout = BufReader::new(child.stdout.take().expect("piped")).lines();
-    let mut stderr = BufReader::new(child.stderr.take().expect("piped")).lines();
+    // Raw lines: one that is not UTF-8 must not end the reading (and with it the
+    // progress and the final file name).
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped")).split(b'\n');
+    let mut stderr = BufReader::new(child.stderr.take().expect("piped")).split(b'\n');
+    let text = |b: Vec<u8>| String::from_utf8_lossy(&b).trim_end_matches('\r').to_owned();
     let mut parser = ProgressParser::default();
     let mut final_path = None;
     let mut last_error = None;
@@ -254,8 +323,9 @@ pub async fn run(
 
     while out_open || err_open {
         tokio::select! {
-            line = stdout.next_line(), if out_open => match line {
+            line = stdout.next_segment(), if out_open => match line {
                 Ok(Some(l)) => {
+                    let l = text(l);
                     if let Some(p) = l.strip_prefix(FILE) {
                         final_path = Some(PathBuf::from(p));
                     } else if let Some(p) = parser.feed(&l) {
@@ -264,8 +334,9 @@ pub async fn run(
                 }
                 _ => out_open = false,
             },
-            line = stderr.next_line(), if err_open => match line {
+            line = stderr.next_segment(), if err_open => match line {
                 Ok(Some(l)) => {
+                    let l = text(l);
                     if let Some(e) = l.strip_prefix("ERROR: ") {
                         last_error = Some(e.to_owned());
                     }
@@ -453,6 +524,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registry_paths_expand_variables() {
+        std::env::set_var("RAUDO_TEST_DIR", r"C:\Users\a\AppData\Local");
+        assert_eq!(expand_env(r"%RAUDO_TEST_DIR%\Microsoft\WinGet\Links"), r"C:\Users\a\AppData\Local\Microsoft\WinGet\Links");
+        assert_eq!(expand_env(r"%RAUDO_NOT_SET%\bin"), r"%RAUDO_NOT_SET%\bin");
+        assert_eq!(expand_env(r" C:\tools 100% "), r"C:\tools 100%");
+    }
+
+    #[test]
     fn args_carry_browser_context() {
         let req = Request {
             url: "https://example.org/v".into(),
@@ -474,6 +553,7 @@ mod tests {
         assert!(has("-f", "22"));
         assert!(has("-P", "home:/tmp/x"));
         assert!(has("-P", "temp:/tmp/t"));
+        assert!(has("--encoding", "utf-8"));
         assert!(has("-o", "100%% real.%(ext)s"));
         assert!(has("--limit-rate", "1000"));
         assert!(has("--add-header", "Cookie:a=1; b=2"));

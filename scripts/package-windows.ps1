@@ -46,6 +46,8 @@ $Loader = Join-Path $Target "release\WebView2Loader.dll"
 if (Test-Path $Loader) { Copy-Item $Loader $Stage }
 Copy-Item extension "$Stage\extension" -Recurse
 Copy-Item LICENSE, README.md $Stage
+# Steps page the installer opens in Chrome, Edge or Brave.
+Copy-Item scripts\install-extension.html $Stage
 if (Test-Path $Xpi) {
     Copy-Item $Xpi "$Stage\boost.xpi"
 } else {
