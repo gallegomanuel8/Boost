@@ -194,6 +194,11 @@ Otros scripts:
 «raudo» es el nombre interno del proyecto y se mantiene en los componentes y rutas
 internas.
 
+## Privacidad
+
+Boost no recoge ni envía datos a ningún servidor: la extensión solo habla con la aplicación
+de tu equipo. Detalles en la [política de privacidad](docs/PRIVACIDAD.md).
+
 ## Licencia
 
 Boost es software libre bajo la [GNU General Public License v3.0 o posterior](LICENSE).
