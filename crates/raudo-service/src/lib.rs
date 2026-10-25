@@ -2,6 +2,7 @@
 //! endpoint for the CLI and the browser host. Embedded by the desktop app;
 //! `raudo-daemon` runs it without a window.
 
+mod cover;
 mod db;
 mod manager;
 mod resolver;

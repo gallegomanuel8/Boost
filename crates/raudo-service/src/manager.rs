@@ -9,6 +9,7 @@ use raudo_proto::{AddDownload, DownloadInfo, MediaInfo, Request, Status, VideoOp
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
 
+use crate::cover;
 use crate::db::{Db, Stored};
 use crate::resolver;
 use crate::video::{self, VideoJob, VideoOutcome};
@@ -435,7 +436,13 @@ impl Manager {
                 }
             }
             let finished = match outcome {
-                Ok(VideoOutcome::Completed(done)) => {
+                Ok(VideoOutcome::Completed(done, meta)) => {
+                    // Album art and tags, still in the temp dir: MusicBrainz first,
+                    // else the thumbnail yt-dlp embedded stays.
+                    if audio_kbps.is_some() && done.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3")) {
+                        let hint = cover::Hint::new(meta.as_ref(), title.as_deref());
+                        cover::tag_mp3(&this.client, &done, &hint).await;
+                    }
                     let name = done.file_name().map(PathBuf::from).unwrap_or_else(|| "video".into());
                     let target = raudo_core::unique_path(dir.join(name), None);
                     match std::fs::create_dir_all(&dir).and_then(|_| raudo_core::move_file(&done, &target)) {
@@ -502,7 +509,7 @@ impl Manager {
         match hls::run(&self.client, job, progress, cancel).await? {
             hls::HlsOutcome::Paused => Ok(VideoOutcome::Paused),
             hls::HlsOutcome::Completed(tracks) => {
-                video::mux(&tracks, out, &stem, audio_kbps).await.map(VideoOutcome::Completed)
+                video::mux(&tracks, out, &stem, audio_kbps).await.map(|p| VideoOutcome::Completed(p, None))
             }
         }
     }

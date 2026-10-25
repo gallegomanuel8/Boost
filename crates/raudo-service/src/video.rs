@@ -14,6 +14,10 @@ use tokio::sync::watch;
 
 const PROGRESS: &str = "RAUDO-P ";
 const FILE: &str = "RAUDO-F ";
+/// What the page says about the song, for the MP3's album art (cover.rs).
+const META: &str = "RAUDO-M ";
+/// Thumbnail cropped to a centred square, the shape of album art.
+const SQUARE_THUMBNAIL: &str = r#"ThumbnailsConvertor+FFmpeg_o:-c:v mjpeg -vf crop="'if(gt(ih,iw),iw,ih)':'if(gt(iw,ih),ih,iw)'""#;
 
 pub struct VideoJob<'a> {
     pub request: &'a Request,
@@ -40,7 +44,8 @@ pub struct Progress {
 }
 
 pub enum VideoOutcome {
-    Completed(PathBuf),
+    /// The file, and yt-dlp's music fields when it ran (META).
+    Completed(PathBuf, Option<Value>),
     Paused,
 }
 
@@ -148,7 +153,7 @@ pub fn ffmpeg_bin() -> PathBuf {
 }
 
 /// A child process that opens no console window on Windows.
-fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
@@ -229,6 +234,8 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
         "download:RAUDO-P %(progress)j",
         "--print",
         "after_move:RAUDO-F %(filepath)s",
+        "--print",
+        "after_move:RAUDO-M %(.{title,track,artist,artists,creator,album,channel,uploader})j",
     ]
     .map(String::from)
     .into();
@@ -251,6 +258,9 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
             a.extend(["-x".into(), "--audio-format".into(), "mp3".into()]);
             let quality = if kbps == 0 { "0".to_owned() } else { format!("{kbps}K") };
             a.extend(["--audio-quality".into(), quality]);
+            // The page's tags and thumbnail; cover.rs swaps in the album's when it finds it.
+            a.extend(["--embed-metadata".into(), "--embed-thumbnail".into(), "--convert-thumbnails".into(), "jpg".into()]);
+            a.extend(["--ppa".into(), SQUARE_THUMBNAIL.into()]);
         }
         None => a.extend(["-f".into(), job.format.unwrap_or("bv*+ba/b").to_owned()]),
     }
@@ -317,6 +327,7 @@ pub async fn run(
     let text = |b: Vec<u8>| String::from_utf8_lossy(&b).trim_end_matches('\r').to_owned();
     let mut parser = ProgressParser::default();
     let mut final_path = None;
+    let mut meta = None;
     let mut last_error = None;
     let mut paused = false;
     let (mut out_open, mut err_open) = (true, true);
@@ -328,6 +339,8 @@ pub async fn run(
                     let l = text(l);
                     if let Some(p) = l.strip_prefix(FILE) {
                         final_path = Some(PathBuf::from(p));
+                    } else if let Some(m) = l.strip_prefix(META) {
+                        meta = serde_json::from_str(m).ok();
                     } else if let Some(p) = parser.feed(&l) {
                         on_progress(p);
                     }
@@ -354,7 +367,7 @@ pub async fn run(
         return Ok(VideoOutcome::Paused);
     }
     match (status.success(), final_path) {
-        (true, Some(p)) => Ok(VideoOutcome::Completed(p)),
+        (true, Some(p)) => Ok(VideoOutcome::Completed(p, meta)),
         (true, None) => Err("yt-dlp finished without reporting a file".into()),
         (false, _) => Err(last_error.unwrap_or_else(|| format!("yt-dlp exited with {status}"))),
     }
