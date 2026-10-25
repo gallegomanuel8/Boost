@@ -116,6 +116,7 @@ const canResume = (d) => CAN_RESUME.includes(d.status);
 const canPause = (d) => CAN_PAUSE.includes(d.status);
 // Finished but deleted from disk, or failed: fetch it again from the start.
 const canRestart = (d) => d.file_missing || d.status === "error";
+const canOpen = (d) => d.status === "completed" && !d.file_missing;
 const statusText = (d) => (d.file_missing ? "Fichero eliminado" : STATUS[d.status] || d.status);
 
 const CATEGORIES = [
@@ -230,7 +231,8 @@ function rowFor(d) {
   return el("button", {
     type: "button", role: "row", class: "row", "aria-selected": selected.has(d.id) ? "true" : "false",
     onclick: (e) => clickRow(e, d.id),
-    ondblclick: () => reveal(d.id),
+    // A finished file opens with its application; anything else shows its folder.
+    ondblclick: () => (canOpen(d) ? openFile(d.id) : reveal(d.id)),
     oncontextmenu: (e) => {
       e.preventDefault();
       // Right-click outside the selection acts on that row alone, as in file managers.
@@ -276,6 +278,7 @@ function renderDetails() {
   $("d-error").hidden = d.status !== "error";
   $("d-error").textContent = d.error ? explain(d.error) : "";
   $("btn-reveal").hidden = false;
+  $("btn-open").hidden = !canOpen(d);
   $("btn-restart").hidden = !canRestart(d);
 
   const p = pct(d);
@@ -320,6 +323,7 @@ function renderMultiDetails(sel) {
   $("d-folder").hidden = true;
   $("d-error").hidden = true;
   $("btn-reveal").hidden = true;
+  $("btn-open").hidden = true;
   $("btn-restart").hidden = !sel.some(canRestart);
   const known = sel.filter((d) => d.size);
   const size = known.reduce((s, d) => s + d.size, 0);
@@ -390,6 +394,10 @@ async function reveal(id) {
   try { await call("reveal", { id }); } catch (e) { toast("No se puede abrir la carpeta: " + e); }
 }
 
+async function openFile(id) {
+  try { await call("open_file", { id }); } catch (e) { toast("No se puede abrir el fichero: " + e); }
+}
+
 /// Runs `cmd` on every selected download it applies to; reports the failures together.
 async function forSelection(cmd, applies) {
   const targets = selection().filter(applies);
@@ -409,6 +417,7 @@ $("btn-resume").onclick = () => forSelection("resume", canResume);
 $("btn-pause").onclick = () => forSelection("pause", canPause);
 $("btn-restart").onclick = () => forSelection("restart", canRestart);
 $("btn-reveal").onclick = () => focus != null && reveal(focus);
+$("btn-open").onclick = () => focus != null && openFile(focus);
 $("btn-pause-all").onclick = () => act(() => call($("btn-pause-all").textContent.startsWith("Pausar") ? "pause_all" : "resume_all"));
 
 let removing = [];
@@ -447,6 +456,7 @@ function openMenu(x, y) {
   $("ctx-resume").disabled = !sel.some(canResume);
   $("ctx-pause").disabled = !sel.some(canPause);
   $("ctx-restart").hidden = !sel.some(canRestart);
+  $("ctx-open").disabled = !(sel.length === 1 && canOpen(sel[0]));
   $("ctx-reveal").disabled = sel.length !== 1;
   $("ctx-remove").textContent = sel.length > 1 ? `Eliminar ${sel.length} descargas…` : "Eliminar…";
   menu.hidden = false;
@@ -459,6 +469,7 @@ function closeMenu() { menu.hidden = true; }
 $("ctx-resume").onclick = () => { closeMenu(); forSelection("resume", canResume); };
 $("ctx-pause").onclick = () => { closeMenu(); forSelection("pause", canPause); };
 $("ctx-restart").onclick = () => { closeMenu(); forSelection("restart", canRestart); };
+$("ctx-open").onclick = () => { closeMenu(); if (focus != null) openFile(focus); };
 $("ctx-reveal").onclick = () => { closeMenu(); if (focus != null) reveal(focus); };
 $("ctx-remove").onclick = () => { closeMenu(); $("btn-remove").click(); };
 document.addEventListener("mousedown", (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });

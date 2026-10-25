@@ -136,6 +136,18 @@ async fn pick_folder(app: AppHandle) -> CmdResult<Option<String>> {
     .map_err(|e| e.to_string())
 }
 
+/// Opens the downloaded file with the application the system has for it.
+#[tauri::command]
+async fn open_file(app: AppHandle, id: i64) -> CmdResult<()> {
+    let d = client().await?.details(id).await.map_err(err)?;
+    if d.pointer("/info/status").and_then(Value::as_str) != Some("completed") {
+        return Err("la descarga no ha terminado".into());
+    }
+    let path = d.get("path").and_then(Value::as_str).map(PathBuf::from).filter(|p| p.is_file());
+    let path = path.ok_or("el fichero ya no está en la carpeta")?;
+    app.opener().open_path(path.display().to_string(), None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Opens the file manager on the downloaded file (or its folder).
 #[tauri::command]
 async fn reveal(app: AppHandle, id: i64) -> CmdResult<()> {
@@ -351,6 +363,7 @@ fn main() {
             resume_all,
             default_dir,
             pick_folder,
+            open_file,
             reveal,
             autostart_enabled,
             set_autostart,
