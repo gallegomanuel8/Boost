@@ -672,10 +672,10 @@ function showTab(name) {
 
 // ----------------------------------------------------------- web extensions
 
-async function loadExtensions() {
+async function loadExtensions(target = $("ext-list")) {
   let list;
   try { list = await call("web_extensions"); } catch (e) { toast(String(e)); return; }
-  $("ext-list").replaceChildren(...list.map((x) => {
+  target.replaceChildren(...list.map((x) => {
     const state = x.installed ? "Extensión instalada"
       : x.outdated ? "Tienes la extensión antigua (raudo): instala la nueva y quita la antigua"
       : !x.present ? "No se ha encontrado este navegador"
@@ -714,13 +714,47 @@ async function installExtension(x) {
   $("ext-copy").onclick = () => navigator.clipboard.writeText(url)
     .then(() => toast("Copiado: pégalo en la barra de direcciones"))
     .catch(() => toast(url));
+  $("ext-mac-hint").hidden = platform !== "macos";
+  $("ext-copy-folder").onclick = () => navigator.clipboard.writeText(x.folder)
+    .then(() => toast("Ruta copiada"))
+    .catch(() => toast(x.folder));
   $("dlg-ext").showModal();
 }
 
 // Picks up an installation made in the browser while the tab is open.
 setInterval(() => {
   if ($("dlg-settings").open && !document.querySelector('[data-panel="browsers"]').hidden) loadExtensions();
+  if ($("dlg-welcome").open) loadExtensions($("wl-ext-list"));
 }, 3000);
+
+// ------------------------------------------------------------------ welcome
+
+let platform = "";
+
+async function showWelcome(state) {
+  $("wl-move").hidden = !state.needs_move;
+  // Step numbers follow the steps shown.
+  let n = state.needs_move ? 1 : 0;
+  for (const s of document.querySelectorAll("#dlg-welcome .wl-n")) s.textContent = `${++n}. `;
+  const missing = [state.ytdlp ? null : "yt-dlp", state.ffmpeg ? null : "ffmpeg"].filter(Boolean);
+  $("wl-tools-state").textContent = missing.length
+    ? `Para descargar vídeos de YouTube y otras webs, y para convertir a MP3, Boost usa yt-dlp y ffmpeg. Falta: ${missing.join(" y ")}.`
+    : "yt-dlp y ffmpeg están instalados: Boost ya puede descargar vídeos de webs y convertir a MP3.";
+  $("wl-tools-cmd").hidden = !missing.length;
+  await loadExtensions($("wl-ext-list"));
+  $("dlg-welcome").showModal();
+}
+
+$("wl-brew-copy").onclick = () => navigator.clipboard.writeText($("wl-brew-cmd").textContent)
+  .then(() => toast("Copiado: pégalo en la Terminal"))
+  .catch(() => toast($("wl-brew-cmd").textContent));
+$("wl-move-go").onclick = async () => {
+  $("wl-move-go").disabled = true;
+  try { await call("move_to_applications"); } catch (e) { toast(String(e)); $("wl-move-go").disabled = false; }
+};
+$("wl-form").addEventListener("submit", () => call("finish_welcome").catch(() => {}));
+// Escape must not skip the guide without marking it seen.
+$("dlg-welcome").addEventListener("cancel", () => call("finish_welcome").catch(() => {}));
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 
 $("st-autostart").onclick = (e) => {
@@ -792,4 +826,7 @@ setInterval(() => reload().catch(() => {}), 10000);
     try { await loadSettings(); await reload(); break; } catch { await new Promise((r) => setTimeout(r, 500)); }
   }
   render();
+  const welcome = await call("welcome_state").catch(() => null);
+  platform = welcome?.platform || "";
+  if (welcome?.first_run) showWelcome(welcome);
 })();

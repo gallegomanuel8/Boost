@@ -202,6 +202,102 @@ fn install_extension(app: AppHandle, browser: String) -> CmdResult<()> {
     app.opener().open_path(folder.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Marks that the welcome guide was seen (per user, not per window).
+fn welcome_marker() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("boost").join("welcome-done"))
+}
+
+/// Only macOS gets the welcome guide: elsewhere the installer registers Boost
+/// with the browsers and offers the extension.
+fn first_run() -> bool {
+    cfg!(target_os = "macos") && welcome_marker().is_some_and(|m| !m.exists())
+}
+
+/// The .app this process runs from (macOS), and whether it sits in an Applications folder.
+#[cfg(target_os = "macos")]
+fn app_bundle() -> Option<(PathBuf, bool)> {
+    let exe = std::env::current_exe().ok()?;
+    let bundle = exe.ancestors().nth(3)?.to_path_buf();
+    if bundle.extension().is_none_or(|e| e != "app") {
+        return None;
+    }
+    let parent = bundle.parent()?;
+    let home_apps = dirs::home_dir().map(|h| h.join("Applications"));
+    let installed = parent == std::path::Path::new("/Applications") || Some(parent.to_path_buf()) == home_apps;
+    Some((bundle, installed))
+}
+
+/// What the welcome guide shows.
+#[tauri::command]
+fn welcome_state() -> Value {
+    #[cfg(target_os = "macos")]
+    // Run from the disk image or Downloads (not from a cargo build): offer to move it.
+    let needs_move = app_bundle().is_some_and(|(_, installed)| !installed);
+    #[cfg(not(target_os = "macos"))]
+    let needs_move = false;
+    serde_json::json!({
+        "first_run": first_run(),
+        "platform": std::env::consts::OS,
+        "needs_move": needs_move,
+        "ytdlp": raudo_service::find_tool("yt-dlp").is_some(),
+        "ffmpeg": raudo_service::find_tool("ffmpeg").is_some(),
+    })
+}
+
+#[tauri::command]
+fn finish_welcome() -> CmdResult<()> {
+    let marker = welcome_marker().ok_or("no data folder")?;
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(marker, b"").map_err(|e| e.to_string())
+}
+
+/// Copies Boost into /Applications (or ~/Applications when that is not
+/// writable) and restarts it from there, so the browsers keep finding it after
+/// the disk image is ejected. The original copy is left where it was.
+#[tauri::command]
+async fn move_to_applications(app: AppHandle) -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let (bundle, _) = app_bundle().ok_or("Boost no se está ejecutando desde una aplicación")?;
+        let system = PathBuf::from("/Applications");
+        let parent = if writable(&system) {
+            system
+        } else {
+            let home = dirs::home_dir().ok_or("no home folder")?.join("Applications");
+            std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+            home
+        };
+        let dest = parent.join("Boost.app");
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest).map_err(|e| format!("No se pudo reemplazar {}: {e}", dest.display()))?;
+        }
+        let ok = std::process::Command::new("ditto").arg(&bundle).arg(&dest).status().map_err(|e| e.to_string())?;
+        if !ok.success() {
+            return Err(format!("No se pudo copiar Boost a {}", parent.display()));
+        }
+        // The new copy can only start once this one has gone (single instance).
+        let relaunch = format!("while kill -0 {} 2>/dev/null; do sleep 0.2; done; open \"$0\"", std::process::id());
+        std::process::Command::new("/bin/sh").arg("-c").arg(relaunch).arg(&dest).spawn().map_err(|e| e.to_string())?;
+        quit(&app);
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("solo en macOS".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn writable(dir: &std::path::Path) -> bool {
+    let probe = dir.join(format!(".boost-write-test-{}", std::process::id()));
+    let ok = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(probe);
+    ok
+}
+
 /// Whether this window's process runs the downloads (false: raudo-daemon does).
 #[tauri::command]
 async fn owns_service(state: tauri::State<'_, AppState>) -> CmdResult<bool> {
@@ -236,10 +332,15 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let sep = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "quit", "Salir (pausa y guarda las descargas)", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &pause, &resume, &sep, &quit_item])?;
-    TrayIconBuilder::with_id("raudo")
-        // Bolt only: the full icon's "Boost" lettering is unreadable at tray size.
-        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
-        .tooltip("Boost")
+    // Bolt only: the full icon's "Boost" lettering is unreadable at tray size.
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+    #[cfg(target_os = "macos")]
+    let icon = template_icon(&icon);
+    let tray = TrayIconBuilder::with_id("raudo").icon(icon);
+    // The menu bar tints template images to match its light or dark look.
+    #[cfg(target_os = "macos")]
+    let tray = tray.icon_as_template(true);
+    tray.tooltip("Boost")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -260,6 +361,46 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+/// The tray icon's white bolt alone, black on transparent and cropped to it:
+/// the menu bar's monochrome style. The yellow tile around it has little blue,
+/// the bolt is white, so blue tells them apart (anti-aliased edges included).
+#[cfg(target_os = "macos")]
+fn template_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
+    let (w, h) = (icon.width() as usize, icon.height() as usize);
+    let alpha: Vec<u8> = icon
+        .rgba()
+        .chunks_exact(4)
+        .map(|p| {
+            let bolt = (p[2].saturating_sub(120) as u32 * 255 / 135).min(255);
+            (bolt * p[3] as u32 / 255) as u8
+        })
+        .collect();
+    // Square around the bolt, with room around it: the menu bar scales the image
+    // to its height, and other apps' glyphs fill about 70% of it.
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for (i, _) in alpha.iter().enumerate().filter(|(_, a)| **a > 32) {
+        let (x, y) = (i % w, i / w);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    if x0 > x1 {
+        return icon.clone().to_owned();
+    }
+    let side = ((x1 - x0).max(y1 - y0) + 1) * 10 / 7;
+    let (cx, cy) = ((x0 + x1) / 2, (y0 + y1) / 2);
+    let mut out = vec![0u8; side * side * 4];
+    for ty in 0..side {
+        for tx in 0..side {
+            let (sx, sy) = ((cx + tx).checked_sub(side / 2), (cy + ty).checked_sub(side / 2));
+            if let (Some(sx), Some(sy)) = (sx, sy) {
+                if sx < w && sy < h {
+                    out[(ty * side + tx) * 4 + 3] = alpha[sy * w + sx];
+                }
+            }
+        }
+    }
+    tauri::image::Image::new_owned(out, side as u32, side as u32)
 }
 
 /// Forwards service events to the window and notifies finished or failed downloads.
@@ -292,6 +433,29 @@ fn notify_status(app: &AppHandle, d: &DownloadInfo) {
         _ => return,
     };
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// A macOS app is dragged into Applications, with no installer to run: each
+/// start tells the browsers where the host inside this bundle is, and leaves
+/// the extension where Chromium browsers can load it.
+#[cfg(target_os = "macos")]
+fn register_with_browsers(app: &AppHandle) {
+    let resources = app.path().resource_dir().ok();
+    std::thread::spawn(move || {
+        if let Err(e) = browsers::sync_extension_folder(resources) {
+            tracing::warn!("cannot copy the browser extension: {e}");
+        }
+        let Some(host) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("raudo-nmhost"))) else {
+            return;
+        };
+        if !host.is_file() {
+            return;
+        }
+        match std::process::Command::new(&host).arg("register").stdout(std::process::Stdio::null()).status() {
+            Ok(s) if s.success() => {}
+            other => tracing::warn!("cannot register the browser host: {other:?}"),
+        }
+    });
 }
 
 fn is_background_arg(arg: &str) -> bool {
@@ -334,8 +498,11 @@ fn main() {
             };
             app.manage(AppState { service: Mutex::new(service) });
             build_tray(app)?;
+            #[cfg(target_os = "macos")]
+            register_with_browsers(app.handle());
             tauri::async_runtime::spawn(forward_events(app.handle().clone()));
-            if !background {
+            // The welcome guide needs the window, however Boost was started.
+            if !background || first_run() {
                 show_main(app.handle());
             }
             Ok(())
@@ -369,8 +536,23 @@ fn main() {
             set_autostart,
             owns_service,
             web_extensions,
-            install_extension
+            install_extension,
+            welcome_state,
+            finish_welcome,
+            move_to_applications
         ])
-        .run(tauri::generate_context!())
-        .expect("Boost failed to start");
+        .build(tauri::generate_context!())
+        .expect("Boost failed to start")
+        .run(|app, event| match event {
+            // Cmd+Q and the app menu's Quit: pause and save first, as the tray's Quit does
+            // (which exits with a code once done).
+            tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+                api.prevent_exit();
+                quit(app);
+            }
+            // Clicking the Dock icon with the window hidden.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows: false, .. } => show_main(app),
+            _ => {}
+        });
 }

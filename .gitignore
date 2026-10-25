@@ -21,3 +21,6 @@
 
 # Release packages (scripts/package.sh)
 /dist/
+
+# macOS Finder metadata
+.DS_Store

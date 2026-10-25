@@ -18,6 +18,7 @@ use tracing::info;
 
 pub use manager::Manager;
 pub use raudo_ipc::ServeError;
+pub use video::find_tool;
 
 fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("raudo")

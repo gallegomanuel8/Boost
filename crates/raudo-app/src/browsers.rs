@@ -41,13 +41,15 @@ struct Chromium {
     flatpak: &'static str,
     /// User data dir under %LOCALAPPDATA%.
     windows: &'static str,
+    /// User data dir under ~/Library/Application Support.
+    macos: &'static str,
 }
 
 const CHROMIUM: &[Chromium] = &[
-    Chromium { browser: "brave", name: "Brave", linux: "BraveSoftware/Brave-Browser", flatpak: "com.brave.Browser", windows: r"BraveSoftware\Brave-Browser\User Data" },
-    Chromium { browser: "chrome", name: "Google Chrome", linux: "google-chrome", flatpak: "com.google.Chrome", windows: r"Google\Chrome\User Data" },
-    Chromium { browser: "edge", name: "Microsoft Edge", linux: "microsoft-edge", flatpak: "com.microsoft.Edge", windows: r"Microsoft\Edge\User Data" },
-    Chromium { browser: "chromium", name: "Chromium", linux: "chromium", flatpak: "org.chromium.Chromium", windows: r"Chromium\User Data" },
+    Chromium { browser: "brave", name: "Brave", linux: "BraveSoftware/Brave-Browser", flatpak: "com.brave.Browser", windows: r"BraveSoftware\Brave-Browser\User Data", macos: "BraveSoftware/Brave-Browser" },
+    Chromium { browser: "chrome", name: "Google Chrome", linux: "google-chrome", flatpak: "com.google.Chrome", windows: r"Google\Chrome\User Data", macos: "Google/Chrome" },
+    Chromium { browser: "edge", name: "Microsoft Edge", linux: "microsoft-edge", flatpak: "com.microsoft.Edge", windows: r"Microsoft\Edge\User Data", macos: "Microsoft Edge" },
+    Chromium { browser: "chromium", name: "Chromium", linux: "chromium", flatpak: "org.chromium.Chromium", windows: r"Chromium\User Data", macos: "Chromium" },
 ];
 
 pub fn list(xpi: Option<&Path>) -> Vec<WebExtension> {
@@ -87,6 +89,9 @@ fn chromium_extension_folder(c: &Chromium) -> Option<PathBuf> {
     if cfg!(windows) {
         // %LOCALAPPDATA%\Programs\Boost\extension, next to boost.exe.
         candidates.extend(std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("extension"))));
+    } else if cfg!(target_os = "macos") {
+        // Copied out of the app bundle at startup: "Load unpacked" cannot look inside an .app.
+        candidates.extend(dirs::data_dir().map(|d| d.join("boost/extension")));
     } else {
         let native = dirs::config_dir().is_some_and(|d| d.join(c.linux).is_dir());
         let flatpak = dirs::home_dir().map(|h| h.join(".var/app").join(c.flatpak));
@@ -104,6 +109,35 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// Copies the extension shipped in the app bundle to where Chromium browsers
+/// can load it unpacked, when that copy is missing or from another version.
+pub fn sync_extension_folder(resource_dir: Option<PathBuf>) -> std::io::Result<()> {
+    let (Some(src), Some(dst)) = (resource_dir.map(|d| d.join("extension")), dirs::data_dir().map(|d| d.join("boost/extension")))
+    else {
+        return Ok(());
+    };
+    let manifest = |dir: &Path| std::fs::read(dir.join("manifest.json")).ok();
+    if manifest(&src).is_none() || manifest(&src) == manifest(&dst) {
+        return Ok(());
+    }
+    let _ = std::fs::remove_dir_all(&dst);
+    copy_dir(&src, &dst)
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), to)?;
+        }
+    }
+    Ok(())
+}
+
 /// Folders that hold Firefox profiles (each subfolder is one).
 fn firefox_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
@@ -111,6 +145,8 @@ fn firefox_roots() -> Vec<PathBuf> {
         if let Some(app_data) = dirs::config_dir() {
             roots.push(app_data.join(r"Mozilla\Firefox\Profiles"));
         }
+    } else if cfg!(target_os = "macos") {
+        roots.extend(dirs::data_dir().map(|d| d.join("Firefox/Profiles")));
     } else if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".mozilla/firefox"));
         roots.push(dirs::config_dir().unwrap_or_else(|| home.join(".config")).join("mozilla/firefox"));
@@ -124,6 +160,9 @@ fn firefox_roots() -> Vec<PathBuf> {
 fn chromium_roots(c: &Chromium) -> Vec<PathBuf> {
     if cfg!(windows) {
         return dirs::data_local_dir().map(|d| vec![d.join(c.windows)]).unwrap_or_default();
+    }
+    if cfg!(target_os = "macos") {
+        return dirs::data_dir().map(|d| vec![d.join(c.macos)]).unwrap_or_default();
     }
     let mut roots = Vec::new();
     if let Some(config) = dirs::config_dir() {
@@ -145,7 +184,8 @@ fn chromium_profile_has_raudo(profile: &Path) -> bool {
 }
 
 /// The signed Firefox extension: where the installer puts it (Linux:
-/// ~/.local/share/boost, Windows: next to boost.exe), or the newest one
+/// ~/.local/share/boost, Windows: next to boost.exe, macOS: the bundle's
+/// Resources), or the newest one
 /// `scripts/sign-extension.sh` produced when running from the source tree.
 pub fn find_xpi(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
     let installed = [
@@ -167,6 +207,16 @@ pub fn find_xpi(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
 
 /// Opens the .xpi with Firefox, which then asks the user to add the extension.
 pub fn install_firefox(xpi: &Path) -> Result<(), String> {
+    if cfg!(target_os = "macos") {
+        // A second firefox process refuses to start while one runs: let
+        // LaunchServices hand the file to the running one (or start it).
+        let status = std::process::Command::new("open")
+            .args(["-a", "Firefox"])
+            .arg(xpi)
+            .status()
+            .map_err(|e| format!("No se pudo abrir Firefox: {e}"))?;
+        return if status.success() { Ok(()) } else { Err("No se ha encontrado Firefox en este equipo".into()) };
+    }
     let exe = firefox_exe().ok_or("No se ha encontrado Firefox en este equipo")?;
     let mut child = std::process::Command::new(exe)
         .arg(xpi)

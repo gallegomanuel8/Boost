@@ -206,9 +206,43 @@
         <li>Pulsa <b>Cargar descomprimida</b> y elige esta carpeta, que ya se ha abierto:
           <code id="ext-folder" class="path"></code></li>
       </ol>
+      <p class="muted small" id="ext-mac-hint" hidden>La carpeta está dentro de <i>Librería</i>, que Finder oculta: en la ventana de «Cargar descomprimida» pulsa <kbd>Cmd</kbd>+<kbd>Mayús</kbd>+<kbd>G</kbd>, pega la ruta y pulsa Intro.
+        <button type="button" class="btn" id="ext-copy-folder">Copiar ruta</button></p>
       <p class="muted small">No borres ni muevas esa carpeta: el navegador carga la extensión desde ella.</p>
     </div>
     <div class="dlg-foot"><button type="submit" class="btn primary">Hecho</button></div>
+  </form>
+</dialog>
+
+<!-- First start (macOS): no installer ran, so Boost walks the user through it -->
+<dialog id="dlg-welcome" class="dlg" aria-labelledby="wl-title">
+  <form method="dialog" id="wl-form">
+    <div class="dlg-head"><h1 id="wl-title">Te damos la bienvenida a Boost</h1></div>
+    <div class="dlg-body">
+      <section id="wl-move" class="wl-step" hidden>
+        <h2>1. Mueve Boost a Aplicaciones</h2>
+        <p class="muted small">Boost se está ejecutando desde la imagen de disco o desde Descargas. Los navegadores lo
+          buscan donde está instalado, así que debe vivir en la carpeta Aplicaciones.</p>
+        <p><button type="button" class="btn primary" id="wl-move-go">Mover a Aplicaciones y reiniciar</button></p>
+      </section>
+      <section class="wl-step">
+        <h2><span class="wl-n"></span>Añade la extensión a tu navegador</h2>
+        <p class="muted small">La extensión envía a Boost las descargas y los vídeos de cada página. Boost ya se ha
+          registrado en los navegadores que tienes; falta añadir la extensión en los que uses.</p>
+        <div role="table" aria-label="Extensiones web" class="ext-list" id="wl-ext-list"></div>
+      </section>
+      <section class="wl-step" id="wl-tools">
+        <h2><span class="wl-n"></span>Vídeo de webs y MP3 (opcional)</h2>
+        <p class="muted small" id="wl-tools-state"></p>
+        <div id="wl-tools-cmd" hidden>
+          <p class="muted small">Instálalos con Homebrew (<code>brew.sh</code>) desde la Terminal:</p>
+          <p><code id="wl-brew-cmd">brew install yt-dlp ffmpeg deno</code>
+            <button type="button" class="btn" id="wl-brew-copy">Copiar</button></p>
+        </div>
+      </section>
+      <p class="muted small">Puedes volver a todo esto en <b>Preferencias → Extensiones web</b>.</p>
+    </div>
+    <div class="dlg-foot"><button type="submit" class="btn primary">Empezar a usar Boost</button></div>
   </form>
 </dialog>
 

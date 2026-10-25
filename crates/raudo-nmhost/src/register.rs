@@ -4,9 +4,11 @@
 //! `HKCU\Software\<browser>\NativeMessagingHosts\org.raudo.nmhost`.
 //! Linux: manifests in each installed browser's per-user folder (sandboxed
 //! Flatpak browsers are set up by scripts/install.sh instead).
+//! macOS: the same, under `~/Library/Application Support`.
 //!
 //! Also the `boost:` link the extension opens to launch Boost when this host
-//! cannot start it (Windows: registry; Linux: the .desktop file of the app).
+//! cannot start it (Windows: registry; Linux: the .desktop file of the app;
+//! macOS: the app bundle's Info.plist).
 
 use std::path::{Path, PathBuf};
 
@@ -132,6 +134,7 @@ mod imp {
     use super::*;
 
     /// Per-user manifest folders; only browsers whose config folder exists get one.
+    #[cfg(not(target_os = "macos"))]
     fn chromium_dirs(home: &Path) -> Vec<PathBuf> {
         ["google-chrome", "google-chrome-beta", "chromium", "BraveSoftware/Brave-Browser", "microsoft-edge", "vivaldi"]
             .iter()
@@ -142,9 +145,28 @@ mod imp {
     }
 
     /// Firefox reads ~/.mozilla even when its profile uses ~/.config/mozilla.
+    #[cfg(not(target_os = "macos"))]
     fn firefox_dir(home: &Path) -> Option<PathBuf> {
         let has_firefox = home.join(".mozilla").is_dir() || home.join(".config/mozilla").is_dir();
         has_firefox.then(|| home.join(".mozilla/native-messaging-hosts"))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn chromium_dirs(home: &Path) -> Vec<PathBuf> {
+        let support = home.join("Library/Application Support");
+        ["Google/Chrome", "Google/Chrome Beta", "Chromium", "BraveSoftware/Brave-Browser", "Microsoft Edge", "Vivaldi"]
+            .iter()
+            .map(|d| support.join(d))
+            .filter(|d| d.is_dir())
+            .map(|d| d.join("NativeMessagingHosts"))
+            .collect()
+    }
+
+    /// Firefox keeps its profiles in `Firefox/` but reads host manifests from `Mozilla/`.
+    #[cfg(target_os = "macos")]
+    fn firefox_dir(home: &Path) -> Option<PathBuf> {
+        let support = home.join("Library/Application Support");
+        support.join("Firefox").is_dir().then(|| support.join("Mozilla/NativeMessagingHosts"))
     }
 
     pub fn register() -> std::io::Result<Vec<String>> {

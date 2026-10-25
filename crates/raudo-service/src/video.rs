@@ -51,7 +51,7 @@ pub enum VideoOutcome {
 
 /// Where helper programs (yt-dlp, ffmpeg, node) are looked for besides PATH:
 /// next to raudo itself (an installer can bundle them), raudo's own bin folder,
-/// winget's links on Windows, and the per-user locations used on Linux.
+/// winget's links on Windows, Homebrew on macOS, and the per-user locations used on Linux.
 fn tool_dirs() -> Vec<PathBuf> {
     let mut dirs_list = Vec::new();
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
@@ -69,6 +69,9 @@ fn tool_dirs() -> Vec<PathBuf> {
     }
     #[cfg(windows)]
     dirs_list.extend(registry_path());
+    // Apps opened from Finder get a bare PATH without Homebrew (Apple Silicon, then Intel).
+    #[cfg(target_os = "macos")]
+    dirs_list.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
     if let Some(h) = dirs::home_dir() {
         dirs_list.push(h.join(".local/bin"));
         dirs_list.push(h.join(".local/opt/node/bin"));

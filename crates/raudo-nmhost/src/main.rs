@@ -104,7 +104,7 @@ fn config() -> Value {
             "enabled": true,
             // Browser downloads smaller than this stay in the browser.
             "minSize": 1024 * 1024,
-            "exts": ["zip","rar","7z","tar","gz","xz","bz2","zst","iso","img","dmg","exe","msi","deb","rpm",
+            "exts": ["zip","rar","7z","tar","gz","xz","bz2","zst","iso","img","dmg","pkg","exe","msi","deb","rpm",
                      "appimage","apk","mp4","mkv","webm","avi","mov","flv","m4v","mp3","m4a","flac","ogg",
                      "opus","wav","pdf","epub"],
         },

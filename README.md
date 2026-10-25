@@ -5,7 +5,7 @@
 <h1 align="center">Boost</h1>
 
 <p align="center">
-  Gestor de descargas para Linux y Windows: descargas con varias conexiones, vídeos de
+  Gestor de descargas para Linux, Windows y macOS: descargas con varias conexiones, vídeos de
   YouTube y cientos de webs, audio MP3 y una extensión que captura las descargas del navegador.
 </p>
 
@@ -103,6 +103,20 @@ instaladas → Boost → Desinstalar*. El historial de descargas (`%APPDATA%\rau
 Para desinstalar: `install.ps1 -Uninstall`.
 </details>
 
+### macOS 11 o posterior
+
+1. Descarga `boost-*-macos-arm64.dmg`, ábrelo y arrastra **Boost** a *Aplicaciones*.
+2. La primera vez, clic derecho en Boost → **Abrir** (la aplicación no está notarizada;
+   también puedes permitirla en *Ajustes del Sistema → Privacidad y seguridad*).
+
+La primera vez, Boost muestra una guía: ofrece moverse a *Aplicaciones* si lo abriste
+desde la imagen de disco, lista tus navegadores con un botón para añadir la extensión en
+cada uno y comprueba si tienes yt-dlp y ffmpeg. Cada vez que arranca, Boost se registra en
+los navegadores que encuentra y deja la extensión para Chromium en
+`~/Library/Application Support/boost/extension`. Para
+desinstalar: borra Boost de *Aplicaciones*. El historial de descargas
+(`~/Library/Application Support/raudo`) se conserva.
+
 ### Vídeo y MP3: yt-dlp y ffmpeg
 
 Las descargas normales y las listas HLS no necesitan nada más. Para los vídeos de webs
@@ -118,6 +132,7 @@ como YouTube y para convertir a MP3, Boost usa estos programas si están instala
 | Fedora | `sudo dnf install yt-dlp ffmpeg-free nodejs` |
 | Debian / Ubuntu | `sudo apt install yt-dlp ffmpeg nodejs` (o yt-dlp desde [su web][yt-dlp], más actual) |
 | Windows | `winget install yt-dlp.yt-dlp Gyan.FFmpeg DenoLand.Deno` |
+| macOS | `brew install yt-dlp ffmpeg deno` |
 
 ## Extensión del navegador
 
@@ -134,6 +149,8 @@ La extensión envía a Boost las descargas y los vídeos que detecta en cada pá
   - Linux: `~/.local/share/boost/extension` (en navegadores Flatpak, la carpeta que indica
     el instalador, dentro de `~/.var/app/…`).
   - Windows: `%LOCALAPPDATA%\Programs\Boost\extension`.
+  - macOS: `~/Library/Application Support/boost/extension` (en el selector de carpetas,
+    `Cmd+Mayús+G` y pega la ruta).
 
 ![Preferencias: extensiones web](docs/capturas/extensiones-web.png)
 
@@ -179,6 +196,9 @@ Otros scripts:
   ```powershell
   powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
   ```
+- `scripts/package-macos.sh` — en macOS, compila y genera `dist/Boost.app` y
+  `dist/boost-<versión>-macos-<arquitectura>.dmg`; con `--install` la copia también a
+  `~/Applications`.
 - `scripts/sign-extension.sh` — firma la extensión de Firefox en addons.mozilla.org
   (necesita claves de la API de AMO).
 
@@ -189,7 +209,7 @@ Otros scripts:
 | `crates/raudo-app` | La aplicación (Tauri 2): ventana, bandeja y el servicio de descargas dentro. |
 | `crates/raudo-service` | Cola, persistencia en SQLite, yt-dlp/ffmpeg y la API para los clientes. |
 | `crates/raudo-core` | Motor HTTP segmentado y descargador HLS. |
-| `crates/raudo-ipc` | Comunicación local: socket Unix (Linux) o *named pipe* (Windows), con token. |
+| `crates/raudo-ipc` | Comunicación local: socket Unix (Linux, macOS) o *named pipe* (Windows), con token. |
 | `crates/raudo-nmhost` | Puente *Native Messaging* entre la extensión y Boost; `register` lo instala en los navegadores. |
 | `crates/raudo-cli` | Cliente de línea de órdenes. |
 | `crates/raudo-daemon` | El servicio sin ventana, para usos sin escritorio. |
