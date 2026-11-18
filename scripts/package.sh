@@ -7,7 +7,8 @@
 # The signed Firefox add-on (web-ext-artifacts/boost-<ext version>.xpi, from
 # scripts/sign-extension.sh) goes into both app packages when it exists.
 # Needs the x86_64-unknown-linux-musl and x86_64-pc-windows-gnu Rust targets
-# (the latter with mingw64-gcc).
+# (the latter with mingw64-gcc). BOOST_SKIP_WINDOWS=1 leaves Windows out (the
+# release workflow builds it natively, with scripts/package-windows.ps1).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,7 +24,9 @@ mkdir -p "$WORK"
 echo "==> building (Linux, Linux static host, Windows)"
 cargo build --release --quiet -p raudo-app -p raudo-nmhost -p raudo-cli
 cargo build --release --quiet -p raudo-nmhost --target x86_64-unknown-linux-musl
-cargo build --release --quiet -p raudo-app -p raudo-nmhost -p raudo-cli --target x86_64-pc-windows-gnu
+if [[ -z "${BOOST_SKIP_WINDOWS:-}" ]]; then
+    cargo build --release --quiet -p raudo-app -p raudo-nmhost -p raudo-cli --target x86_64-pc-windows-gnu
+fi
 
 common() {
     local dir=$1
@@ -46,6 +49,7 @@ install -m 755 scripts/install.sh "$L/install.sh"
 common "$L"
 tar -C "$WORK" -czf "$DIST/boost-$VERSION-linux-x86_64.tar.gz" "$(basename "$L")"
 
+if [[ -z "${BOOST_SKIP_WINDOWS:-}" ]]; then
 echo "==> Windows package"
 W="$WORK/boost-$VERSION-windows-x86_64"
 mkdir -p "$W"
@@ -55,6 +59,7 @@ cp target/x86_64-pc-windows-gnu/release/WebView2Loader.dll "$W/"
 cp scripts/install.ps1 "$W/"
 common "$W"
 (cd "$WORK" && zip -qr "$DIST/boost-$VERSION-windows-x86_64.zip" "$(basename "$W")")
+fi
 
 echo "==> browser extensions"
 (cd extension && zip -qr "$DIST/boost-$VERSION-extension-chromium.zip" .)

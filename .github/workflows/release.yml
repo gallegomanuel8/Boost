@@ -1,0 +1,98 @@
+# Builds the Linux and Windows packages of a release on GitHub's machines and
+# attaches them to its (draft) release, then rebuilds SHA256SUMS.
+#
+# The release must already exist with the signed Firefox add-on attached
+# (boost-<version>-extension-firefox.xpi): Mozilla's signature cannot be made here.
+# macOS is built, signed and notarized locally (scripts/package-macos.sh --publish).
+#
+#   gh workflow run release.yml -f tag=v0.1.4
+name: Release packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.1.4)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TAG: ${{ inputs.tag }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux
+    # glibc 2.39: the oldest the README promises (Ubuntu 24.04, Fedora 40, Debian 13).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version matches the tag
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [[ "v$version" == "$TAG" ]] || { echo "Cargo.toml has $version, tag is $TAG"; exit 1; }
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Signed Firefox add-on from the release
+        run: |
+          ext=$(jq -r .version extension/manifest.json)
+          mkdir -p web-ext-artifacts
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "*-extension-firefox.xpi" -O "web-ext-artifacts/boost-$ext.xpi"
+      - name: Test
+        run: cargo test --workspace
+      - name: Package
+        run: BOOST_SKIP_WINDOWS=1 scripts/package.sh
+      - name: Attach to the release
+        run: gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber dist/boost-*-linux-x86_64.tar.gz
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    env:
+      # No Visual C++ runtime to install on the user's machine.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Signed Firefox add-on from the release
+        shell: pwsh
+        run: |
+          $ext = (Get-Content extension\manifest.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force web-ext-artifacts | Out-Null
+          gh release download $env:TAG -R $env:GITHUB_REPOSITORY -p "*-extension-firefox.xpi" -O "web-ext-artifacts\boost-$ext.xpi"
+      - name: Package
+        shell: pwsh
+        run: scripts\package-windows.ps1
+      - name: Attach to the release
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist -Filter "boost-*-windows-x86_64*" | ForEach-Object FullName
+          gh release upload $env:TAG -R $env:GITHUB_REPOSITORY --clobber @files
+
+  checksums:
+    name: SHA256SUMS
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checksums of every package in the release
+        run: |
+          mkdir assets && cd assets
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY"
+          rm -f SHA256SUMS latest.json
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber SHA256SUMS

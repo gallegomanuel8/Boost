@@ -1,5 +1,6 @@
 # Builds the Windows installer of a release into dist\, natively on Windows:
 #   boost-<version>-windows-x86_64-setup.exe   (Inno Setup, per-user, no admin)
+#   boost-<version>-windows-x86_64.zip         the same files plus install.ps1, no installer
 # Needs Rust (x86_64-pc-windows-gnu with MinGW gcc, or MSVC) and Inno Setup 6.
 # The signed Firefox add-on (web-ext-artifacts\boost-<ext version>.xpi, from
 # scripts/sign-extension.sh or the GitHub release) goes in when it exists.
@@ -53,6 +54,13 @@ if (Test-Path $Xpi) {
 } else {
     Write-Host "    (no signed ${Xpi}: the Firefox add-on is not included)"
 }
+
+Write-Host "==> zip"
+$Zip = Join-Path $Dist "boost-$Version-windows-x86_64.zip"
+Remove-Item $Zip -ErrorAction SilentlyContinue
+Copy-Item scripts\install.ps1 $Stage
+Compress-Archive -Path $Stage -DestinationPath $Zip
+Remove-Item "$Stage\install.ps1"
 
 Write-Host "==> installer"
 & $Iscc /Q "/DAppVersion=$Version" "/DStage=$Stage" "/DOutDir=$Dist" scripts\boost.iss
