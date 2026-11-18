@@ -46,6 +46,13 @@ function mp3Kbps() {
   return Number($("mp3-quality").value);
 }
 
+/** The GIF the user set up: preset and part of the video (0 s = to the end). */
+function gifOptions() {
+  const start = Math.max(0, Number($("gif-from").value) || 0);
+  const seconds = Number($("gif-seconds").value);
+  return { preset: $("gif-preset").value, start: start || null, duration: seconds || null };
+}
+
 async function download(d, button) {
   if (button) button.disabled = true;
   try {
@@ -235,7 +242,9 @@ function renderMedia(list) {
       if (!isAudio(m)) {
         const mp3 = el("button", { textContent: "MP3", title: "Descargar solo el audio en MP3", disabled: !usable });
         mp3.onclick = () => download({ ...base, video: true, audioKbps: mp3Kbps() }, mp3);
-        line.append(mp3);
+        const gif = el("button", { textContent: "GIF", title: "Convertir en GIF animado (ajustes de «GIF animado»)", disabled: !usable });
+        gif.onclick = () => download({ ...base, video: true, gif: gifOptions() }, gif);
+        line.append(mp3, gif);
       }
       const meta = describe(m) + (m.info?.live ? " · directo (no soportado)" : "");
       return el("li", {}, line, el("div", { className: "meta", textContent: meta, title: m.url }));
@@ -259,7 +268,7 @@ function followInspections(list) {
 
 // ------------------------------------------------------------- page support
 
-const PAGE_BUTTONS = ["page-best", "page-formats", "formats-go", "page-mp3"];
+const PAGE_BUTTONS = ["page-best", "page-formats", "formats-go", "page-mp3", "page-gif"];
 
 function setPageSupport(supported, via, checking = false) {
   for (const b of PAGE_BUTTONS) $(b).disabled = !supported;
@@ -344,6 +353,7 @@ async function refresh() {
   const web = /^https?:/i.test(tab?.url || "");
   $("page").hidden = !web;
   $("audio").hidden = !web;
+  $("gif").hidden = !web;
   renderMedia(state.media || []);
   followInspections(state.media || []);
   if (web) checkPage();
@@ -352,6 +362,7 @@ async function refresh() {
 
 $("page-best").onclick = (e) => download({ url: tab.url, video: true }, e.target);
 $("page-mp3").onclick = (e) => download({ url: tab.url, video: true, audioKbps: mp3Kbps() }, e.target);
+$("page-gif").onclick = (e) => download({ url: tab.url, video: true, gif: gifOptions() }, e.target);
 $("page-formats").onclick = loadFormats;
 $("formats-go").onclick = (e) => download({ url: tab.url, video: true, format: $("formats").value }, e.target);
 $("launch-go").onclick = async (e) => {
@@ -380,5 +391,12 @@ api.storage.local.get("mp3Kbps").then((v) => {
   if (v.mp3Kbps != null) $("mp3-quality").value = String(v.mp3Kbps);
 });
 $("mp3-quality").onchange = () => api.storage.local.set({ mp3Kbps: mp3Kbps() });
+// And the GIF quality and length (not the start: that depends on the video).
+api.storage.local.get(["gifPreset", "gifSeconds"]).then((v) => {
+  if (v.gifPreset) $("gif-preset").value = v.gifPreset;
+  if (v.gifSeconds != null) $("gif-seconds").value = String(v.gifSeconds);
+});
+$("gif-preset").onchange = () => api.storage.local.set({ gifPreset: $("gif-preset").value });
+$("gif-seconds").onchange = () => api.storage.local.set({ gifSeconds: Number($("gif-seconds").value) });
 
 refresh();

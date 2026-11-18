@@ -29,6 +29,11 @@
   quedas con la mejor. Las listas **HLS** (`.m3u8`) se descargan con el motor propio,
   segmento a segmento, también las cifradas con AES-128.
 - **Solo audio en MP3**, con la calidad que elijas (128–320 kbps o VBR).
+- **GIF animado** de un fragmento del vídeo, en tres calidades pensadas para GIF:
+  Ligero (320 px, 10 fps), Equilibrado (480 px, 20 fps) y Alta (640 px, 25 fps). Solo se
+  descarga el fragmento elegido, y cada GIF lleva una paleta de 256 colores hecha para él.
+- **Avisa de las versiones nuevas** (las busca en GitHub; se puede desactivar). En macOS se
+  instalan solas, verificadas con la firma del proyecto.
 - **Extensión para Firefox y navegadores Chromium** (Chrome, Brave, Edge, Vivaldi):
   detecta los vídeos y ficheros de la página, captura las descargas del navegador y
   muestra el progreso de las descargas en curso.
@@ -196,9 +201,12 @@ Otros scripts:
   ```powershell
   powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
   ```
-- `scripts/package-macos.sh` — en macOS, compila y genera `dist/Boost.app` y
-  `dist/boost-<versión>-macos-<arquitectura>.dmg`; con `--install` la copia también a
-  `~/Applications`.
+- `scripts/package-macos.sh` — en macOS, compila y genera `dist/Boost.app`,
+  `dist/boost-<versión>-macos-<arquitectura>.dmg` y la actualización firmada
+  `dist/Boost.app.tar.gz`; con `--install` la copia también a `~/Applications` y con
+  `--publish` sube el .dmg y la actualización a la release `v<versión>` (con su
+  `latest.json`). Si el llavero tiene un certificado *Developer ID Application*, firma con
+  él y, con el perfil de notarización `boost-notary`, notariza (detalles en el script).
 - `scripts/sign-extension.sh` — firma la extensión de Firefox en addons.mozilla.org
   (necesita claves de la API de AMO).
 
@@ -221,7 +229,8 @@ internas.
 ## Privacidad
 
 Boost no recoge ni envía datos a ningún servidor: la extensión solo habla con la aplicación
-de tu equipo. Detalles en la [política de privacidad](docs/PRIVACIDAD.md).
+de tu equipo. La aplicación solo consulta GitHub para saber si hay versión nueva y
+MusicBrainz para las portadas de los MP3. Detalles en la [política de privacidad](docs/PRIVACIDAD.md).
 
 ## Licencia
 

@@ -32,7 +32,7 @@
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     button:disabled { opacity: .5; cursor: default; }
     .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-    select { font: inherit; min-width: 0; padding: 2px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+    select, input[type=number] { font: inherit; min-width: 0; padding: 2px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
     #formats { flex: 1; }
     .empty, .hint { color: var(--muted); margin: 0; }
     #msg { font-size: 12px; min-height: 1em; }
@@ -90,6 +90,31 @@
     </div>
     <p class="hint" style="margin-top:6px">Extrae solo la pista de audio del vídeo y la convierte a MP3.</p>
     <p class="hint" id="audio-hint" hidden></p>
+  </section>
+
+  <section id="gif">
+    <h2>GIF animado</h2>
+    <div class="row">
+      <button id="page-gif" class="primary">Crear GIF del vídeo</button>
+      <select id="gif-preset" title="Calidad del GIF">
+        <option value="light">Ligero · 320 px, 10 fps</option>
+        <option value="balanced" selected>Equilibrado · 480 px, 20 fps</option>
+        <option value="high">Alta · 640 px, 25 fps</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label for="gif-from" class="hint">Desde el segundo</label>
+      <input id="gif-from" type="number" min="0" step="1" value="0" style="width:5em">
+      <label for="gif-seconds" class="hint">durante</label>
+      <select id="gif-seconds">
+        <option value="5">5 s</option>
+        <option value="10" selected>10 s</option>
+        <option value="15">15 s</option>
+        <option value="30">30 s</option>
+        <option value="0">todo el vídeo</option>
+      </select>
+    </div>
+    <p class="hint" style="margin-top:6px">Sin sonido. Un GIF pesa mucho más que el vídeo: mejor clips cortos. El botón GIF de cada medio detectado usa estos ajustes.</p>
   </section>
 
   <section id="media-section">

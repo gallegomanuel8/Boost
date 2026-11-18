@@ -2,14 +2,28 @@
 # Builds Boost for macOS into dist/:
 #   Boost.app                                  app + browser host + CLI + extension
 #   boost-<version>-macos-<arch>.dmg          the app, to drag into Applications
+#   Boost.app.tar.gz + .sig                    the update the app installs by itself
 # The app registers its browser host and copies the extension out of the bundle
 # each time it starts, so the .dmg needs no installer.
 # The signed Firefox add-on (web-ext-artifacts/boost-<ext version>.xpi, from
 # scripts/sign-extension.sh) goes into the bundle; when it is not there, the one
 # of this version's GitHub release is used if it holds the same extension version.
-# The bundle is signed ad hoc (not notarized): the first time, open it with
-# right click → Open, or allow it in System Settings → Privacy & Security.
-# Usage: package-macos.sh [--install]   (--install also copies it to ~/Applications)
+#
+# Signing: with a "Developer ID Application" certificate in the keychain the app
+# and the .dmg are signed with it (hardened runtime) and, when the notary
+# credentials are saved as the keychain profile "boost-notary", notarized and
+# stapled, so they open with no Gatekeeper warning. Without the certificate the
+# bundle is signed ad hoc: the first time it is opened with right click → Open.
+#   xcrun notarytool store-credentials boost-notary --apple-id <id> --team-id <team>
+#
+# Updates: Boost.app.tar.gz is signed with the updater key (~/.config/boost/updater.key,
+# its password in the keychain item "boost-updater"); the app checks it against
+# crates/raudo-app/updater/public-key.txt.
+#
+# Usage: package-macos.sh [--install] [--publish]
+#   --install  also copies it to ~/Applications
+#   --publish  uploads the .dmg and the update to the GitHub release v<version>
+#              (which must exist) and adds them to its SHA256SUMS and latest.json
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,6 +32,20 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 EXT_VERSION=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" extension/manifest.json)
 XPI="web-ext-artifacts/boost-$EXT_VERSION.xpi"
 ARCH=$(uname -m)
+INSTALL=0
+PUBLISH=0
+for arg in "$@"; do
+    case "$arg" in
+        --install) INSTALL=1 ;;
+        --publish) PUBLISH=1 ;;
+        *) echo "unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
+# By its SHA-1: names with accents ("Rodríguez") do not reach codesign intact.
+DEVELOPER_ID=$(security find-identity -v -p codesigning | grep '"Developer ID Application: ' | head -1 || true)
+IDENTITY=$(awk '{print $2}' <<<"$DEVELOPER_ID")
+IDENTITY_NAME=$(sed -n 's/.*"\(.*\)"/\1/p' <<<"$DEVELOPER_ID")
+UPDATER_KEY="$HOME/.config/boost/updater.key"
 DIST="$ROOT/dist"
 APP="$DIST/Boost.app"
 WORK="$DIST/work"
@@ -53,6 +81,15 @@ if [[ ! -f "$XPI" ]]; then
         echo "    (signed Firefox add-on taken from the v$VERSION release)"
     fi
 fi
+if [[ ! -f "$XPI" ]]; then
+    # Firefox only installs add-ons Mozilla has signed: until this version is
+    # signed (scripts/sign-extension.sh), ship the newest signed one.
+    OLDER=$(ls -t web-ext-artifacts/*.xpi 2>/dev/null | head -1 || true)
+    if [[ -n "$OLDER" ]]; then
+        echo "    WARNING: no signed Firefox add-on $EXT_VERSION; shipping $(basename "$OLDER") (sign it with scripts/sign-extension.sh)"
+        XPI="$OLDER"
+    fi
+fi
 if [[ -f "$XPI" ]]; then
     cp "$XPI" "$APP/Contents/Resources/boost.xpi"
 else
@@ -85,7 +122,18 @@ cat >"$APP/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
-codesign --force --deep --sign - "$APP"
+if [[ -n "$IDENTITY" ]]; then
+    echo "==> signing with $IDENTITY_NAME"
+    # Inner executables first, each with the hardened runtime notarization requires.
+    for exe in raudo-nmhost raudo-cli boost; do
+        codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/MacOS/$exe"
+    done
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+    codesign --verify --strict --deep "$APP"
+else
+    echo "==> signing ad hoc (no Developer ID Application certificate in the keychain)"
+    codesign --force --deep --sign - "$APP"
+fi
 
 echo "==> disk image"
 DMG="$DIST/boost-$VERSION-macos-$ARCH.dmg"
@@ -95,9 +143,70 @@ cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -quiet -volname "Boost $VERSION" -srcfolder "$STAGE" -format UDZO "$DMG"
+
+if [[ -n "$IDENTITY" ]]; then
+    codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+    if xcrun notarytool history --keychain-profile boost-notary >/dev/null 2>&1; then
+        echo "==> notarizing (a few minutes)"
+        # The disk image carries the app: both are notarized and get the ticket.
+        xcrun notarytool submit "$DMG" --keychain-profile boost-notary --wait
+        xcrun stapler staple "$DMG"
+        xcrun stapler staple "$APP"
+        spctl --assess --type open --context context:primary-signature -v "$DMG"
+        spctl --assess --type execute -v "$APP"
+    else
+        echo "    (no notary profile \"boost-notary\": signed but not notarized)"
+    fi
+fi
+
+echo "==> update package"
+UPDATE="$DIST/Boost.app.tar.gz"
+rm -f "$UPDATE" "$UPDATE.sig"
+# No AppleDouble (._*) files in the archive.
+COPYFILE_DISABLE=1 tar -czf "$UPDATE" -C "$DIST" Boost.app
+if [[ -f "$UPDATER_KEY" ]]; then
+    CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD=$(security find-generic-password -s boost-updater -w) \
+        "$HOME/.cargo/bin/cargo-packager" signer sign --private-key "$UPDATER_KEY" "$UPDATE" -q
+else
+    echo "    (no $UPDATER_KEY: the update is not signed and cannot be published)"
+fi
 rm -rf "$WORK"
 
-if [[ "${1:-}" == "--install" ]]; then
+if ((PUBLISH)); then
+    TAG="v$VERSION"
+    REPO="gallegomanuel8/Boost"
+    [[ -f "$UPDATE.sig" ]] || { echo "the update is not signed" >&2; exit 1; }
+    gh release view "$TAG" -R "$REPO" >/dev/null || { echo "release $TAG does not exist" >&2; exit 1; }
+    echo "==> publishing to $TAG"
+    PUB="$DIST/publish"
+    rm -rf "$PUB"
+    mkdir -p "$PUB"
+    cp "$DMG" "$UPDATE" "$UPDATE.sig" "$PUB/"
+    # Keep what the other platforms put in SHA256SUMS and latest.json.
+    gh release download "$TAG" -R "$REPO" -p SHA256SUMS -D "$PUB" 2>/dev/null || touch "$PUB/SHA256SUMS"
+    gh release download "$TAG" -R "$REPO" -p latest.json -D "$PUB" 2>/dev/null || true
+    (cd "$PUB" && grep -v -e " $(basename "$DMG")\$" -e " Boost.app.tar.gz\$" SHA256SUMS >SHA256SUMS.new || true
+        shasum -a 256 "$(basename "$DMG")" Boost.app.tar.gz >>SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS)
+    python3 - "$PUB" "$TAG" "$REPO" "aarch64" <<'PY'
+import datetime, json, os, sys
+pub, tag, repo, arch = sys.argv[1:]
+path = os.path.join(pub, "latest.json")
+manifest = json.load(open(path)) if os.path.exists(path) else {}
+manifest["version"] = tag.lstrip("v")
+manifest["notes"] = f"https://github.com/{repo}/releases/tag/{tag}"
+manifest["pub_date"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+manifest.setdefault("platforms", {})[f"macos-{arch}"] = {
+    "url": f"https://github.com/{repo}/releases/download/{tag}/Boost.app.tar.gz",
+    "signature": open(os.path.join(pub, "Boost.app.tar.gz.sig")).read().strip(),
+    "format": "app",
+}
+json.dump(manifest, open(path, "w"), indent=2)
+PY
+    gh release upload "$TAG" -R "$REPO" --clobber "$PUB/$(basename "$DMG")" "$PUB/Boost.app.tar.gz" "$PUB/SHA256SUMS" "$PUB/latest.json"
+    rm -rf "$PUB"
+fi
+
+if ((INSTALL)); then
     echo "==> installing in ~/Applications"
     mkdir -p "$HOME/Applications"
     rm -rf "$HOME/Applications/Boost.app"
@@ -105,4 +214,4 @@ if [[ "${1:-}" == "--install" ]]; then
     "$HOME/Applications/Boost.app/Contents/MacOS/raudo-nmhost" register
 fi
 
-echo "==> done: $APP, $DMG"
+echo "==> done: $APP, $DMG, $UPDATE"

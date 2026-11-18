@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use raudo_ipc::{Client, ClientError};
-use raudo_proto::{AddDownload, Request, VideoOptions};
+use raudo_proto::{AddDownload, GifOptions, Request, VideoOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -81,6 +81,9 @@ struct DownloadMsg {
     /// MP3 bitrate in kbit/s: download the audio track only.
     #[serde(default)]
     audio_kbps: Option<u32>,
+    /// Convert the video to an animated GIF: `{preset, start, duration}`.
+    #[serde(default)]
+    gif: Option<GifOptions>,
 }
 
 impl PageMsg {
@@ -238,14 +241,14 @@ impl Host {
                 Ok(json!({ "protocol": PROTOCOL, "daemon": daemon, "config": config() }))
             }
             Msg::Download(d) => {
-                let video = d.video || d.format.is_some() || d.audio_kbps.is_some();
+                let video = d.video || d.format.is_some() || d.audio_kbps.is_some() || d.gif.is_some();
                 let add = AddDownload {
                     request: d.page.request(),
                     dir: None,
                     filename: d.filename,
                     title: d.title,
                     paused: false,
-                    video: video.then_some(VideoOptions { format: d.format, audio_kbps: d.audio_kbps }),
+                    video: video.then_some(VideoOptions { format: d.format, audio_kbps: d.audio_kbps, gif: d.gif }),
                 };
                 let id = self.call(Call::Add(add)).await?;
                 Ok(json!({ "downloadId": id }))

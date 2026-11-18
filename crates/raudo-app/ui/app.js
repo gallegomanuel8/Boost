@@ -507,12 +507,24 @@ for (const b of document.querySelectorAll("[data-close]")) {
 
 const add = { mode: "file", format: null, info: null, probeSeq: 0 };
 const mp3Default = () => { try { return localStorage.getItem("mp3Kbps") || "192"; } catch { return "192"; } };
+const stored = (key, fallback) => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
+const store = (key, value) => { try { localStorage.setItem(key, value); } catch { /* per-window convenience */ } };
+
+/// "1:05", "65" or "1:02:05" → seconds; null when it is not a time.
+function parseTime(text) {
+  const parts = text.trim().split(":");
+  if (!parts.length || parts.length > 3 || parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return null;
+  return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
+}
 
 async function openAdd(url = "") {
   $("add-url").value = url;
   $("add-name").value = "";
   $("add-dir").value = settings.download_dir || (await call("default_dir").catch(() => ""));
   $("add-kbps").value = mp3Default();
+  $("add-gif-preset").value = stored("gifPreset", "balanced");
+  $("add-gif-seconds").value = stored("gifSeconds", "10");
+  $("add-gif-from").value = "0:00";
   resetProbe();
   $("dlg-add").showModal();
   $("add-url").focus();
@@ -532,6 +544,7 @@ function resetProbe() {
   $("add-modes").hidden = true;
   $("add-formats").hidden = true;
   $("add-mp3").hidden = true;
+  $("add-gif").hidden = true;
   $("add-go").disabled = false;
 }
 
@@ -591,8 +604,9 @@ function pickMode(mode, showChoices = true) {
   for (const b of $("add-modes").querySelectorAll(".choice")) b.setAttribute("aria-checked", String(b.dataset.mode === mode));
   if (!showChoices) $("add-modes").hidden = true;
   $("add-mp3").hidden = mode !== "audio";
+  $("add-gif").hidden = mode !== "gif";
   renderFormats();
-  $("add-go").textContent = mode === "audio" ? "Descargar MP3" : "Descargar";
+  $("add-go").textContent = { audio: "Descargar MP3", gif: "Crear GIF" }[mode] || "Descargar";
 }
 for (const b of document.querySelectorAll("#add-modes .choice")) b.onclick = () => pickMode(b.dataset.mode);
 
@@ -641,9 +655,21 @@ async function submitAdd(paused) {
   const name = $("add-name").value.trim();
   const ext = extOf(urlFileName(url));
   const isStream = ["m3u8", "mpd"].includes(ext);
-  const video = add.mode === "audio"
-    ? { format: null, audio_kbps: Number($("add-kbps").value) }
-    : add.info || isStream ? { format: add.format, audio_kbps: null } : null;
+  let gif = null;
+  if (add.mode === "gif") {
+    const start = parseTime($("add-gif-from").value || "0");
+    if (start == null) { toast("«Desde» tiene que ser un tiempo, como 1:05 o 65"); $("add-gif-from").focus(); return; }
+    const seconds = Number($("add-gif-seconds").value);
+    if (add.info?.duration && start >= add.info.duration) { toast(`El vídeo dura ${duration(add.info.duration)}`); return; }
+    gif = { preset: $("add-gif-preset").value, start: start || null, duration: seconds || null };
+    store("gifPreset", gif.preset);
+    store("gifSeconds", String(seconds));
+  }
+  const video = gif
+    ? { format: null, audio_kbps: null, gif }
+    : add.mode === "audio"
+    ? { format: null, audio_kbps: Number($("add-kbps").value), gif: null }
+    : add.info || isStream ? { format: add.format, audio_kbps: null, gif: null } : null;
   const download = {
     request: { url, headers: [] },
     dir: $("add-dir").value.trim() || null,
@@ -727,9 +753,67 @@ setInterval(() => {
   if ($("dlg-welcome").open) loadExtensions($("wl-ext-list"));
 }, 3000);
 
+// ------------------------------------------------------------------ updates
+
+let update = null;
+
+function showUpdate(u) {
+  update = u;
+  const dismissed = stored("updateDismissed", "");
+  if (!u || dismissed === u.version) { $("update-bar").hidden = true; return; }
+  $("update-text").textContent = `Boost ${u.version} está disponible (tienes la ${appVersion}).`;
+  $("update-go").textContent = u.installable ? "Instalar y reiniciar" : "Descargar";
+  $("update-go").disabled = false;
+  $("update-later").hidden = false;
+  $("update-bar").hidden = false;
+}
+
+$("update-notes").onclick = () => update && call("open_release", { url: update.page }).catch((e) => toast(String(e)));
+$("update-later").onclick = () => { store("updateDismissed", update.version); $("update-bar").hidden = true; };
+$("update-go").onclick = async () => {
+  if (!update.installable) { call("open_release", { url: update.page }).catch((e) => toast(String(e))); return; }
+  $("update-go").disabled = true;
+  $("update-later").hidden = true;
+  $("update-text").textContent = `Descargando Boost ${update.version}…`;
+  // On success Boost pauses the downloads, restarts and this window goes away.
+  try { await call("install_update"); } catch (e) {
+    toast("No se pudo actualizar: " + e);
+    $("update-go").disabled = false;
+    $("update-later").hidden = false;
+    $("update-text").textContent = `Boost ${update.version} está disponible.`;
+  }
+};
+listen("update-available", ({ payload }) => showUpdate(payload));
+listen("update-progress", ({ payload }) => {
+  if (payload.stage === "downloading") {
+    const pct = payload.fraction != null ? ` ${Math.round(payload.fraction * 100)} %` : "";
+    $("update-text").textContent = `Descargando Boost ${update.version}…${pct}`;
+  } else if (payload.stage === "installing") {
+    $("update-text").textContent = `Instalando Boost ${update.version}: Boost se reiniciará y las descargas seguirán.`;
+  }
+});
+
+$("st-updates").onclick = (e) => {
+  const sw = e.currentTarget;
+  const on = sw.getAttribute("aria-checked") !== "true";
+  sw.setAttribute("aria-checked", String(on));
+  call("set_update_check", { enabled: on }).catch((err) => toast(String(err)));
+};
+$("st-check").onclick = async (e) => {
+  e.currentTarget.disabled = true;
+  try {
+    const u = await call("check_updates");
+    if (!u) { toast(`Boost ${appVersion} es la última versión.`); return; }
+    store("updateDismissed", "");
+    showUpdate(u);
+    $("dlg-settings").close("cancel");
+  } catch (err) { toast("No se pudo comprobar: " + err); } finally { $("st-check").disabled = false; }
+};
+
 // ------------------------------------------------------------------ welcome
 
 let platform = "";
+let appVersion = "";
 
 async function showWelcome(state) {
   $("wl-move").hidden = !state.needs_move;
@@ -771,6 +855,8 @@ $("btn-settings").onclick = async () => {
   $("st-engine").textContent = ownsService
     ? "Las descargas se ejecutan dentro de esta aplicación: al cerrar la ventana siguen en la bandeja; «Salir» las pausa."
     : "Las descargas las ejecuta el servicio en segundo plano (raudo-daemon); esta ventana es solo un cliente.";
+  $("st-version").textContent = `Versión ${appVersion}. Se consulta GitHub al abrir Boost y cada 6 horas.`;
+  $("st-updates").setAttribute("aria-checked", String(await call("update_check_enabled").catch(() => true)));
   const auto = await call("autostart_enabled").catch(() => false);
   $("st-autostart").setAttribute("aria-checked", String(auto));
   $("st-autostart").dataset.was = String(auto);
@@ -828,5 +914,6 @@ setInterval(() => reload().catch(() => {}), 10000);
   render();
   const welcome = await call("welcome_state").catch(() => null);
   platform = welcome?.platform || "";
+  appVersion = welcome?.version || "";
   if (welcome?.first_run) showWelcome(welcome);
 })();

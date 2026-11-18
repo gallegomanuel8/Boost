@@ -48,6 +48,65 @@ pub struct VideoOptions {
     /// Keep only the audio track, converted to MP3 at this bitrate in kbit/s (0 = best VBR).
     #[serde(default)]
     pub audio_kbps: Option<u32>,
+    /// Convert the video to an animated GIF (no sound).
+    #[serde(default)]
+    pub gif: Option<GifOptions>,
+}
+
+/// An animated GIF made from a video: a preset of coherent settings plus the
+/// part of the video to use.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GifOptions {
+    #[serde(default)]
+    pub preset: GifPreset,
+    /// Seconds from the start of the video.
+    #[serde(default)]
+    pub start: Option<f64>,
+    /// Seconds of video to keep; `None` = to the end.
+    #[serde(default)]
+    pub duration: Option<f64>,
+}
+
+/// GIF frame delays are whole hundredths of a second, so only frame rates that
+/// divide 100 play at their real speed (15 fps would be 6.67 cs, rounded).
+/// Browsers slow delays under 2 cs down to 10 cs, so 50 fps is the ceiling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GifPreset {
+    /// Chats and forums: small files.
+    Light,
+    #[default]
+    Balanced,
+    /// Smooth and sharp, at several times the size.
+    High,
+}
+
+impl GifPreset {
+    /// Maximum width in pixels (smaller videos are not enlarged).
+    pub fn width(self) -> u32 {
+        match self {
+            GifPreset::Light => 320,
+            GifPreset::Balanced => 480,
+            GifPreset::High => 640,
+        }
+    }
+
+    pub fn fps(self) -> u32 {
+        match self {
+            GifPreset::Light => 10,
+            GifPreset::Balanced => 20,
+            GifPreset::High => 25,
+        }
+    }
+
+    /// ffmpeg `paletteuse` dithering: ordered (Bayer) dithering compresses far
+    /// better; error diffusion looks smoother on gradients.
+    pub fn dither(self) -> &'static str {
+        match self {
+            GifPreset::Light => "bayer:bayer_scale=4",
+            GifPreset::Balanced | GifPreset::High => "sierra2_4a",
+        }
+    }
 }
 
 /// Result of `Formats`: what yt-dlp can offer for a page.

@@ -36,4 +36,8 @@ npx -y web-ext@10.7.0 sign -s extension --channel unlisted --artifacts-dir "$OUT
 XPI=$(ls -t "$OUT"/*-"$VERSION".xpi | head -1)
 mv "$XPI" "$OUT/boost-$VERSION.xpi"
 echo "Firmado: $OUT/boost-$VERSION.xpi"
-command -v firefox >/dev/null && firefox "$OUT/boost-$VERSION.xpi"
+if [[ "$(uname)" == Darwin ]]; then
+    open -a Firefox "$OUT/boost-$VERSION.xpi" 2>/dev/null || true
+elif command -v firefox >/dev/null; then
+    firefox "$OUT/boost-$VERSION.xpi"
+fi

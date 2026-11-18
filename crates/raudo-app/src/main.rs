@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browsers;
+mod updates;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -238,6 +239,7 @@ fn welcome_state() -> Value {
     serde_json::json!({
         "first_run": first_run(),
         "platform": std::env::consts::OS,
+        "version": env!("CARGO_PKG_VERSION"),
         "needs_move": needs_move,
         "ytdlp": raudo_service::find_tool("yt-dlp").is_some(),
         "ffmpeg": raudo_service::find_tool("ffmpeg").is_some(),
@@ -277,17 +279,63 @@ async fn move_to_applications(app: AppHandle) -> CmdResult<()> {
         if !ok.success() {
             return Err(format!("No se pudo copiar Boost a {}", parent.display()));
         }
-        // The new copy can only start once this one has gone (single instance).
-        let relaunch = format!("while kill -0 {} 2>/dev/null; do sleep 0.2; done; open \"$0\"", std::process::id());
-        std::process::Command::new("/bin/sh").arg("-c").arg(relaunch).arg(&dest).spawn().map_err(|e| e.to_string())?;
-        quit(&app);
-        Ok(())
+        restart_from(&app, &dest)
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
         Err("solo en macOS".into())
     }
+}
+
+/// Pauses and saves the downloads, exits, and opens `bundle` once this process
+/// has gone (a new instance would otherwise find this one and close).
+#[cfg(target_os = "macos")]
+fn restart_from(app: &AppHandle, bundle: &std::path::Path) -> CmdResult<()> {
+    let relaunch = format!("while kill -0 {} 2>/dev/null; do sleep 0.2; done; open \"$0\"", std::process::id());
+    std::process::Command::new("/bin/sh").arg("-c").arg(relaunch).arg(bundle).spawn().map_err(|e| e.to_string())?;
+    quit(app);
+    Ok(())
+}
+
+// ---------------------------------------------------------------- updates
+
+/// Checks for a newer release now (Preferences); `null` when up to date.
+#[tauri::command]
+async fn check_updates(app: AppHandle) -> CmdResult<Option<updates::Available>> {
+    updates::check(&app).await
+}
+
+/// Installs the update the last check found and restarts Boost (macOS).
+#[tauri::command]
+async fn install_update(app: AppHandle) -> CmdResult<()> {
+    updates::install(&app).await?;
+    #[cfg(target_os = "macos")]
+    {
+        let (bundle, _) = app_bundle().ok_or("Boost no se está ejecutando desde una aplicación")?;
+        restart_from(&app, &bundle)
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(())
+}
+
+/// Opens a page of Boost's GitHub releases in the browser (nothing else).
+#[tauri::command]
+fn open_release(app: AppHandle, url: String) -> CmdResult<()> {
+    if !url.starts_with("https://github.com/gallegomanuel8/Boost/releases/") {
+        return Err("dirección no permitida".into());
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_check_enabled() -> bool {
+    updates::automatic()
+}
+
+#[tauri::command]
+fn set_update_check(enabled: bool) -> CmdResult<()> {
+    updates::set_automatic(enabled).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -497,10 +545,12 @@ fn main() {
                 }
             };
             app.manage(AppState { service: Mutex::new(service) });
+            app.manage(updates::Pending::default());
             build_tray(app)?;
             #[cfg(target_os = "macos")]
             register_with_browsers(app.handle());
             tauri::async_runtime::spawn(forward_events(app.handle().clone()));
+            tauri::async_runtime::spawn(updates::watch(app.handle().clone()));
             // The welcome guide needs the window, however Boost was started.
             if !background || first_run() {
                 show_main(app.handle());
@@ -539,7 +589,12 @@ fn main() {
             install_extension,
             welcome_state,
             finish_welcome,
-            move_to_applications
+            move_to_applications,
+            check_updates,
+            open_release,
+            install_update,
+            update_check_enabled,
+            set_update_check
         ])
         .build(tauri::generate_context!())
         .expect("Boost failed to start")

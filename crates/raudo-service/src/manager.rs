@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use raudo_core::{hls, Dest, Error as EngineError, Event, Job, Limiter, Options, Outcome};
-use raudo_proto::{AddDownload, DownloadInfo, MediaInfo, Request, Status, VideoOptions};
+use raudo_proto::{AddDownload, DownloadInfo, GifOptions, MediaInfo, Request, Status, VideoOptions};
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
 
@@ -388,7 +388,9 @@ impl Manager {
         tokio::spawn(async move {
             let dir = PathBuf::from(&stored.dir);
             let format = stored.video.as_ref().and_then(|v| v.format.clone());
-            let audio_kbps = stored.video.as_ref().and_then(|v| v.audio_kbps);
+            let gif = stored.video.as_ref().and_then(|v| v.gif.clone());
+            // A GIF has no sound: it wins over MP3 if both were asked for.
+            let audio_kbps = stored.video.as_ref().and_then(|v| v.audio_kbps).filter(|_| gif.is_none());
             let temp = this.temp_dir(id);
             // yt-dlp overwrites an existing output (MP3 conversion always does), so it
             // finishes inside the temp dir and we pick a free name in `dir` ourselves.
@@ -397,7 +399,7 @@ impl Manager {
             let mut request = stored.request.clone();
 
             let mut outcome = this
-                .stream_or_ytdlp(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel.clone())
+                .stream_or_ytdlp(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, gif.as_ref(), cancel.clone())
                 .await;
             // Look for the stream behind the page ourselves when yt-dlp cannot parse
             // the page, or when the link the browser saw is refused here (tokens bound
@@ -431,7 +433,7 @@ impl Manager {
                         ..page
                     };
                     outcome = this
-                        .stream_or_ytdlp(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, cancel)
+                        .stream_or_ytdlp(id, &request, &out, &temp, title.as_deref(), format.as_deref(), audio_kbps, gif.as_ref(), cancel)
                         .await;
                 }
             }
@@ -469,6 +471,7 @@ impl Manager {
         title: Option<&str>,
         format: Option<&str>,
         audio_kbps: Option<u32>,
+        gif: Option<&GifOptions>,
         cancel: watch::Receiver<bool>,
     ) -> std::result::Result<VideoOutcome, String> {
         let mut on_progress = self.progress_sink(id);
@@ -480,16 +483,25 @@ impl Manager {
                 title,
                 format,
                 audio_kbps,
+                gif,
                 rate_limit: self.limiter.rate(),
             };
-            return video::run(job, on_progress, cancel).await;
+            return match (video::run(job, on_progress, cancel).await?, gif) {
+                // yt-dlp fetched only the GIF's part of the video.
+                (VideoOutcome::Completed(done, _), Some(g)) => {
+                    let stem = done.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "video".into());
+                    video::to_gif(&done, out, &stem, g, false).await.map(|p| VideoOutcome::Completed(p, None))
+                }
+                (outcome, _) => Ok(outcome),
+            };
         }
 
         let job = hls::HlsJob {
             request,
             work_dir: &temp.join("hls"),
             // The audio is the same in every variant: a small one is enough for MP3.
-            max_height: audio_kbps.map(|_| 480),
+            // A GIF is at most 640 px wide.
+            max_height: if gif.is_some() { Some(720) } else { audio_kbps.map(|_| 480) },
             concurrency: 6,
         };
         let from_url = raudo_core::http::filename_from_url(&request.url)
@@ -497,7 +509,8 @@ impl Manager {
             .map(|n| n.trim_end_matches(".m3u8").to_owned());
         let stem = video::clean_stem(&title.map(str::to_owned).or(from_url).unwrap_or_else(|| "video".into()));
         // Shown while downloading; the final name may get " (1)" if taken.
-        let shown = format!("{stem}.{}", if audio_kbps.is_some() { "mp3" } else { "mp4" });
+        let ext = if gif.is_some() { "gif" } else if audio_kbps.is_some() { "mp3" } else { "mp4" };
+        let shown = format!("{stem}.{ext}");
         let progress = |p: hls::HlsProgress| {
             on_progress(video::Progress {
                 downloaded: p.downloaded,
@@ -509,7 +522,12 @@ impl Manager {
         match hls::run(&self.client, job, progress, cancel).await? {
             hls::HlsOutcome::Paused => Ok(VideoOutcome::Paused),
             hls::HlsOutcome::Completed(tracks) => {
-                video::mux(&tracks, out, &stem, audio_kbps).await.map(|p| VideoOutcome::Completed(p, None))
+                let joined = video::mux(&tracks, out, &stem, audio_kbps).await?;
+                match gif {
+                    Some(g) => video::to_gif(&joined, out, &stem, g, true).await,
+                    None => Ok(joined),
+                }
+                .map(|p| VideoOutcome::Completed(p, None))
             }
         }
     }

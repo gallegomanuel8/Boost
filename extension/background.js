@@ -101,12 +101,12 @@ async function cookieHeader(url) {
 }
 
 async function sendDownload({
-  url, referer = null, filename = null, title = null, video = false, format = null, audioKbps = null, page = null,
+  url, referer = null, filename = null, title = null, video = false, format = null, audioKbps = null, gif = null, page = null,
 }) {
   const cookies = await cookieHeader(url);
   const r = await call({
     type: "download", url, referer, cookies, userAgent: navigator.userAgent,
-    filename, title, video, format, audioKbps, page,
+    filename, title, video, format, audioKbps, gif, page,
   });
   flashBadge();
   return r.downloadId;

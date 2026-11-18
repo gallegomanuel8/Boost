@@ -1,6 +1,6 @@
 # Política de privacidad de Boost
 
-*Última actualización: 25 de octubre de 2026*
+*Última actualización: 18 de noviembre de 2026*
 
 Boost es un gestor de descargas formado por una aplicación de escritorio y una extensión
 para navegadores (Firefox, Chrome, Edge, Brave y otros basados en Chromium). Esta política
@@ -10,8 +10,9 @@ explica qué datos usa la extensión y qué hace con ellos.
 
 **Boost no recoge, no envía a ningún servidor propio y no comparte ningún dato personal.**
 Todo lo que la extensión ve se queda en tu ordenador: solo se comunica con la aplicación
-Boost instalada en el mismo equipo. La única consulta a un servicio externo es la búsqueda
-de la portada de las canciones que descargas en MP3 (ver más abajo).
+Boost instalada en el mismo equipo. Las únicas consultas a servicios externos son la
+búsqueda de la portada de las canciones que descargas en MP3 y la comprobación de
+actualizaciones en GitHub (ver más abajo).
 
 ## Qué datos usa la extensión y para qué
 
@@ -32,7 +33,7 @@ fichero desde su servidor original y no los transmite a nadie más.
 
 ## Qué se guarda
 
-- En el navegador: la calidad de MP3 que eliges y, mientras la pestaña está abierta, la
+- En el navegador: la calidad de MP3 y los ajustes de GIF que eliges y, mientras la pestaña está abierta, la
   lista de medios detectados en ella.
 - En la aplicación: el historial de descargas (dirección, nombre del fichero, carpeta y
   estado), en una base de datos local de tu equipo. Puedes borrar cualquier descarga de la
@@ -56,6 +57,16 @@ de la página ni datos de tu cuenta; como en cualquier conexión, esos servidore
 dirección IP y que la petición viene de Boost (con su número de versión). Puedes consultar
 la [política de privacidad de MetaBrainz](https://metabrainz.org/privacy).
 
+## Actualizaciones
+
+Al abrirse y cada 6 horas, la aplicación pregunta a GitHub (`api.github.com`) cuál es la
+última versión publicada de Boost. No envía datos tuyos ni de tus descargas; como en
+cualquier conexión, GitHub ve tu dirección IP y que la petición viene de Boost (con su número
+de versión). Si instalas una actualización en macOS, el paquete se descarga de
+`github.com`. Puedes desactivar la comprobación en *Preferencias → General → Buscar
+actualizaciones*. Consulta la
+[declaración de privacidad de GitHub](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
+
 Aparte de eso, las únicas conexiones a internet son las descargas que tú pides, hacia el
 servidor donde está cada fichero.
 
@@ -68,7 +79,7 @@ Para dudas sobre esta política, abre una incidencia en
 
 # Boost privacy policy (English)
 
-*Last updated: October 25, 2026*
+*Last updated: November 18, 2026*
 
 **Boost does not collect, transmit to any server of its own or share any personal data.** The browser
 extension reads, on your computer only, the active tab's address and title, the addresses of
@@ -81,6 +92,9 @@ Boost uses no servers of its own, no analytics, advertising or tracking, does no
 share data, and runs no remote code. Besides the downloads you request, the only internet
 connection is the album-art lookup for songs downloaded as MP3: the application sends only
 the song title and artist name to musicbrainz.org and fetches the cover from
-coverartarchive.org ([MetaBrainz privacy policy](https://metabrainz.org/privacy)).
+coverartarchive.org ([MetaBrainz privacy policy](https://metabrainz.org/privacy)). The
+application also asks GitHub (api.github.com) for the latest Boost version at start-up and
+every 6 hours, sending no data about you or your downloads; this can be turned off in
+Preferences → General.
 
 Questions: <https://github.com/gallegomanuel8/Boost/issues>.

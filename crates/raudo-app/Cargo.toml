@@ -28,3 +28,5 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dirs.workspace = true
+reqwest.workspace = true
+cargo-packager-updater = "0.2"

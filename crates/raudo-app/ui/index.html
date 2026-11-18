@@ -38,6 +38,14 @@
 </header>
 
 <div id="banner" class="banner" hidden></div>
+<div id="update-bar" class="update-bar" role="status" hidden>
+  <span id="update-text"></span>
+  <span class="update-actions">
+    <button type="button" class="btn" id="update-notes">Novedades</button>
+    <button type="button" class="btn" id="update-later">Ahora no</button>
+    <button type="button" class="btn primary" id="update-go"></button>
+  </span>
+</div>
 
 <div class="body">
   <nav class="side" id="cats" aria-label="Categorías"></nav>
@@ -101,6 +109,7 @@
       <div role="radiogroup" aria-label="Qué descargar" class="choices" id="add-modes" hidden>
         <button type="button" role="radio" class="choice" data-mode="video"><span class="strong">Vídeo</span><span class="muted small">Imagen y sonido, elige la calidad</span></button>
         <button type="button" role="radio" class="choice" data-mode="audio"><span class="strong">Solo audio MP3</span><span class="muted small">Extrae la pista de audio y la convierte</span></button>
+        <button type="button" role="radio" class="choice" data-mode="gif"><span class="strong">GIF animado</span><span class="muted small">Un fragmento del vídeo, sin sonido</span></button>
       </div>
 
       <div role="radiogroup" aria-label="Calidad" class="formats" id="add-formats" hidden></div>
@@ -110,6 +119,23 @@
           <option value="128">128 kbps</option><option value="192">192 kbps</option>
           <option value="256">256 kbps</option><option value="320">320 kbps</option><option value="0">Máxima (VBR)</option>
         </select></label>
+
+      <div class="gif-opts" id="add-gif" hidden>
+        <label class="inline"><span>Calidad</span>
+          <select id="add-gif-preset">
+            <option value="light">Ligero · 320 px, 10 fps</option>
+            <option value="balanced">Equilibrado · 480 px, 20 fps</option>
+            <option value="high">Alta · 640 px, 25 fps</option>
+          </select></label>
+        <label class="inline"><span>Desde</span>
+          <input type="text" id="add-gif-from" value="0:00" inputmode="numeric" placeholder="m:ss" size="6"></label>
+        <label class="inline"><span>Duración</span>
+          <select id="add-gif-seconds">
+            <option value="5">5 s</option><option value="10">10 s</option><option value="15">15 s</option>
+            <option value="30">30 s</option><option value="0">Hasta el final</option>
+          </select></label>
+        <p class="muted small" id="add-gif-hint">Ligero para chats y foros; Equilibrado para la mayoría; Alta es más fluido y nítido, pero pesa unas tres veces más. Un GIF pesa mucho más que el vídeo: mejor fragmentos cortos.</p>
+      </div>
 
       <label class="field"><span>Guardar en</span>
         <span class="with-btn"><input type="text" id="add-dir"><button type="button" class="btn" id="add-pick">Cambiar…</button></span></label>
@@ -159,6 +185,13 @@
           </div>
           <div class="toggle-row">
             <span><span>Carpeta de descargas</span><span class="muted small" id="st-dir"></span></span>
+          </div>
+          <div class="toggle-row">
+            <span><span>Buscar actualizaciones</span><span class="muted small" id="st-version"></span></span>
+            <span class="update-actions">
+              <button type="button" class="btn" id="st-check">Buscar ahora</button>
+              <button type="button" role="switch" class="switch" id="st-updates" aria-checked="true" aria-label="Buscar actualizaciones automáticamente"><span></span></button>
+            </span>
           </div>
           <p class="muted small" id="st-engine"></p>
         </section>

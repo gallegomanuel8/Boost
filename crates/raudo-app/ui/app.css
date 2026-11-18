@@ -61,6 +61,9 @@ button:disabled { cursor: default; opacity: .45; }
 .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); }
 
 .banner { padding: 10px 16px; background: var(--err); color: #fff; font-weight: 600; }
+.update-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--soft); border-bottom: 1px solid var(--line); }
+.update-actions { display: flex; align-items: center; gap: 8px; }
 
 /* layout */
 .body { flex: 1; min-height: 0; display: flex; }
@@ -227,6 +230,8 @@ input[type=url], input[type=text], input[type=number], select {
 .ext-row > span:first-child { display: flex; flex-direction: column; min-width: 0; }
 .ext-row .btn { min-width: 150px; justify-content: center; }
 .ext-row .btn.done { background: var(--track); border-color: var(--track); color: var(--muted); opacity: 1; }
+.gif-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+.gif-opts p { flex-basis: 100%; margin: 0; }
 .wl-step h2 { margin: 0 0 6px; font-size: 14px; }
 .wl-step p { margin: 0 0 8px; }
 kbd { font-family: ui-monospace, monospace; font-size: 11px; padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; }

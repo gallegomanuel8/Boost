@@ -1,4 +1,5 @@
-//! Video downloads through yt-dlp (sites, HLS/DASH manifests) and ffmpeg (merging).
+//! Video downloads through yt-dlp (sites, HLS/DASH manifests) and ffmpeg (merging,
+//! MP3 and animated GIF conversion).
 //!
 //! Pausing stops yt-dlp (SIGINT on Unix, termination on Windows); it keeps its
 //! `.part` files and continues them on the next run.
@@ -6,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use raudo_proto::{MediaFormat, MediaInfo, Request};
+use raudo_proto::{GifOptions, MediaFormat, MediaInfo, Request};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -30,6 +31,8 @@ pub struct VideoJob<'a> {
     pub format: Option<&'a str>,
     /// Extract the audio as MP3 at this bitrate (kbit/s, 0 = best VBR).
     pub audio_kbps: Option<u32>,
+    /// Fetch a video to turn into a GIF (only the part it uses).
+    pub gif: Option<&'a GifOptions>,
     /// Bytes per second.
     pub rate_limit: Option<u64>,
 }
@@ -252,8 +255,16 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
     a.extend(["-P".into(), format!("temp:{}", job.temp_dir.display())]);
     a.extend(js_runtime_args());
     a.extend(ffmpeg_location_args());
-    match job.audio_kbps {
-        Some(kbps) => {
+    match (job.gif, job.audio_kbps) {
+        (Some(gif), _) => {
+            // No sound, and a GIF is at most 640 px wide: 720p is plenty (vertical
+            // videos included). Without such a format, the best one.
+            a.extend(["-f".into(), job.format.unwrap_or("bv*[height<=720]/b[height<=720]/bv*/b").to_owned()]);
+            if let Some(section) = gif_section(gif) {
+                a.extend(["--download-sections".into(), section]);
+            }
+        }
+        (None, Some(kbps)) => {
             // Audio-only stream when the site has one (YouTube, DASH). Muxed-only sites (most
             // HLS) carry the same audio in every variant, so a ≤480p one avoids fetching
             // gigabytes of video just to throw it away.
@@ -265,7 +276,7 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
             a.extend(["--embed-metadata".into(), "--embed-thumbnail".into(), "--convert-thumbnails".into(), "jpg".into()]);
             a.extend(["--ppa".into(), SQUARE_THUMBNAIL.into()]);
         }
-        None => a.extend(["-f".into(), job.format.unwrap_or("bv*+ba/b").to_owned()]),
+        (None, None) => a.extend(["-f".into(), job.format.unwrap_or("bv*+ba/b").to_owned()]),
     }
     if let Some(r) = job.rate_limit {
         a.extend(["--limit-rate".into(), r.to_string()]);
@@ -274,6 +285,67 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
     a.push("--".into());
     a.push(job.request.url.clone());
     a
+}
+
+/// yt-dlp `--download-sections` for the part of the video a GIF uses, so a
+/// few seconds of a long video do not mean downloading all of it.
+fn gif_section(gif: &GifOptions) -> Option<String> {
+    let start = gif.start.filter(|s| *s > 0.0);
+    let duration = gif.duration.filter(|d| *d > 0.0);
+    if start.is_none() && duration.is_none() {
+        return None;
+    }
+    let from = start.unwrap_or(0.0);
+    let to = duration.map_or("inf".to_owned(), |d| format!("{}", from + d));
+    Some(format!("*{from}-{to}"))
+}
+
+/// ffmpeg arguments that turn `input` into the GIF `out`. Two passes in one
+/// filter graph: a 256-colour palette made for this clip (weighted towards what
+/// moves), then the frames mapped onto it, redrawing only the area that changed.
+fn gif_args(input: &Path, out: &Path, gif: &GifOptions, trim: bool) -> Vec<String> {
+    let p = gif.preset;
+    let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-y"].map(String::from).into();
+    if trim {
+        if let Some(s) = gif.start.filter(|s| *s > 0.0) {
+            a.extend(["-ss".into(), s.to_string()]);
+        }
+        if let Some(d) = gif.duration.filter(|d| *d > 0.0) {
+            a.extend(["-t".into(), d.to_string()]);
+        }
+    }
+    a.extend(["-i".into(), input.to_string_lossy().into_owned()]);
+    let graph = format!(
+        "[0:v]fps={fps},scale='min({w},iw)':-2:flags=lanczos,split[a][b];\
+         [a]palettegen=max_colors=256:stats_mode=diff[p];\
+         [b][p]paletteuse=dither={dither}:diff_mode=rectangle",
+        fps = p.fps(),
+        w = p.width(),
+        dither = p.dither(),
+    );
+    a.extend(["-filter_complex".into(), graph, "-an".into(), "-loop".into(), "0".into()]);
+    a.push(out.to_string_lossy().into_owned());
+    a
+}
+
+/// Converts the downloaded video to `<out_dir>/<stem>.gif` and deletes it.
+/// `trim`: cut to the GIF's part here (yt-dlp has already done it otherwise).
+pub async fn to_gif(input: &Path, out_dir: &Path, stem: &str, gif: &GifOptions, trim: bool) -> Result<PathBuf, String> {
+    let out = out_dir.join(format!("{stem}.gif"));
+    let result = command(ffmpeg_bin())
+        .args(gif_args(input, &out, gif, trim))
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await;
+    match result {
+        Ok(o) if o.status.success() => {
+            let _ = tokio::fs::remove_file(input).await;
+            Ok(out)
+        }
+        Ok(o) => Err(format!("ffmpeg could not make the GIF: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Err(e) => Err(format!("cannot run ffmpeg: {e}")),
+    }
 }
 
 /// Aggregates per-file progress: merged formats download video then audio,
@@ -562,6 +634,7 @@ mod tests {
             title: Some("100% real"),
             format: Some("22"),
             audio_kbps: None,
+            gif: None,
             rate_limit: Some(1000),
         };
         let a = download_args(&job);
@@ -581,6 +654,32 @@ mod tests {
         let a = download_args(&mp3);
         let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
         assert!(has("-f", "ba/b[height<=480]/w") && has("--audio-format", "mp3") && has("--audio-quality", "192K"));
+
+        let clip = GifOptions { start: Some(12.5), duration: Some(5.0), ..Default::default() };
+        let gif = VideoJob { format: None, audio_kbps: Some(192), gif: Some(&clip), ..job };
+        let a = download_args(&gif);
+        let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
+        // The GIF wins over MP3, and only its seconds are fetched.
+        assert!(has("-f", "bv*[height<=720]/b[height<=720]/bv*/b") && has("--download-sections", "*12.5-17.5"));
+        assert!(!a.iter().any(|x| x == "--audio-format"));
+    }
+
+    #[test]
+    fn gif_sections_and_filters() {
+        let g = |start, duration| GifOptions { start, duration, ..Default::default() };
+        assert_eq!(gif_section(&g(None, None)), None);
+        assert_eq!(gif_section(&g(Some(0.0), Some(10.0))).as_deref(), Some("*0-10"));
+        assert_eq!(gif_section(&g(Some(90.0), None)).as_deref(), Some("*90-inf"));
+
+        let light = GifOptions { preset: raudo_proto::GifPreset::Light, ..g(Some(3.0), Some(4.0)) };
+        let a = gif_args(Path::new("in.mp4"), Path::new("out.gif"), &light, true);
+        let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
+        assert!(has("-ss", "3") && has("-t", "4") && has("-loop", "0"));
+        let graph = &a[a.iter().position(|x| x == "-filter_complex").unwrap() + 1];
+        assert!(graph.contains("fps=10,scale='min(320,iw)'") && graph.contains("dither=bayer"));
+        // Already cut by yt-dlp: no second trim.
+        let a = gif_args(Path::new("in.mp4"), Path::new("out.gif"), &light, false);
+        assert!(!a.iter().any(|x| x == "-ss" || x == "-t"));
     }
 
     #[test]

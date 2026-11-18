@@ -5,7 +5,7 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use raudo_core::{Dest, Event, Job, Limiter, Options, Outcome, Request, State};
 use raudo_ipc::{Client, Event as IpcEvent};
-use raudo_proto::{AddDownload, DownloadInfo, Status, VideoOptions};
+use raudo_proto::{AddDownload, DownloadInfo, GifOptions, GifPreset, Status, VideoOptions};
 use tokio::sync::{mpsc, watch};
 
 #[derive(Parser)]
@@ -41,6 +41,16 @@ enum Cmd {
         /// Keep only the audio, as MP3 at this bitrate in kbit/s (0 = best VBR).
         #[arg(long, value_name = "KBPS")]
         mp3: Option<u32>,
+        /// Convert the video to an animated GIF: light (320 px, 10 fps),
+        /// balanced (480 px, 20 fps) or high (640 px, 25 fps).
+        #[arg(long, value_name = "PRESET", value_parser = ["light", "balanced", "high"])]
+        gif: Option<String>,
+        /// GIF: second of the video to start at.
+        #[arg(long, value_name = "SECONDS", requires = "gif")]
+        from: Option<f64>,
+        /// GIF: seconds of video to use (default: to the end).
+        #[arg(long, value_name = "SECONDS", requires = "gif")]
+        seconds: Option<f64>,
         /// Name to use when the server's file name looks random.
         #[arg(long)]
         title: Option<String>,
@@ -120,7 +130,16 @@ async fn daemon(cmd: Cmd) -> AnyResult {
     let mut mgr = Client::connect("cli").await?;
     match cmd {
         Cmd::Get(_) => unreachable!(),
-        Cmd::Add { url, dir, output, paused, referer, cookies, video, format, mp3, title } => {
+        Cmd::Add { url, dir, output, paused, referer, cookies, video, format, mp3, gif, from, seconds, title } => {
+            let gif = gif.map(|preset| GifOptions {
+                preset: match preset.as_str() {
+                    "light" => GifPreset::Light,
+                    "high" => GifPreset::High,
+                    _ => GifPreset::Balanced,
+                },
+                start: from,
+                duration: seconds,
+            });
             let dir = dir.map(|d| std::path::absolute(d).map(|p| p.to_string_lossy().into_owned())).transpose()?;
             let add = AddDownload {
                 request: Request { url, referer, cookies, ..Default::default() },
@@ -128,8 +147,8 @@ async fn daemon(cmd: Cmd) -> AnyResult {
                 filename: output,
                 title,
                 paused,
-                video: (video || format.is_some() || mp3.is_some())
-                    .then_some(VideoOptions { format, audio_kbps: mp3 }),
+                video: (video || format.is_some() || mp3.is_some() || gif.is_some())
+                    .then_some(VideoOptions { format, audio_kbps: mp3, gif }),
             };
             let id = mgr.add(add).await?;
             println!("{id}");
