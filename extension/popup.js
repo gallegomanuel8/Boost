@@ -214,8 +214,10 @@ function renderMedia(list) {
   $("media-empty").textContent = state?.videoSite
     ? "En esta web el vídeo llega en fragmentos: usa los botones de arriba."
     : "Nada detectado todavía. Si no aparece, dale a reproducir y vuelve a abrir.";
+  // Several entries often share the page title: number them, and let a click show which is which.
+  $("media-tip").hidden = list.length < 2;
   $("media").replaceChildren(
-    ...list.map((m) => {
+    ...list.map((m, i) => {
       const stream = m.kind !== "file";
       // What the player really sent; the tab URL is only a guess for older entries.
       const base = {
@@ -235,10 +237,9 @@ function renderMedia(list) {
         textContent: type, className: "primary", disabled: !usable, title: `Descargar como ${type}`,
       });
       get.onclick = () => download({ ...base, video: stream }, get);
-      const line = el("div", { className: "line" },
-        el("span", { className: "name", textContent: displayName(m), title: m.url }),
-        get,
-      );
+      const name = el("span", { className: "name locate", textContent: displayName(m), title: `Mostrar en la página\n${m.url}` });
+      name.onclick = () => locate(m);
+      const line = el("div", { className: "line" }, el("span", { className: "num", textContent: `${i + 1}.` }), name, get);
       if (!isAudio(m)) {
         const mp3 = el("button", { textContent: "MP3", title: "Descargar solo el audio en MP3", disabled: !usable });
         mp3.onclick = () => download({ ...base, video: true, audioKbps: mp3Kbps() }, mp3);
@@ -250,6 +251,16 @@ function renderMedia(list) {
       return el("li", {}, line, el("div", { className: "meta", textContent: meta, title: m.url }));
     }),
   );
+}
+
+/** Outlines the page's player of `m` and scrolls to it. */
+async function locate(m) {
+  try {
+    const found = await send({ type: "locate", tabId: tab?.id, url: m.url });
+    if (!found) say("No se ve en la página (puede estar en un reproductor que la oculta). Prueba el clic derecho sobre el vídeo.");
+  } catch (e) {
+    say(e.message, "err");
+  }
 }
 
 /** Streams still being inspected by the background: refresh the list until they are done. */
@@ -279,10 +290,8 @@ function setPageSupport(supported, via, checking = false) {
     : supported
       ? via === "player" ? "Reproductor reconocido: se descargará el vídeo que contiene." : "Usa yt-dlp: funciona en YouTube y cientos de webs."
       : "Esta web no está soportada para descarga directa. Usa «Medios detectados» (dale a reproducir si está vacío).";
-  for (const id of ["page-hint", "audio-hint"]) {
-    $(id).textContent = hint;
-    $(id).hidden = false;
-  }
+  $("page-hint").textContent = hint;
+  $("page-hint").hidden = false;
 }
 
 async function checkPage() {
@@ -337,7 +346,7 @@ async function refresh() {
   const st = $("status");
   // Boost closed: the only thing to do is open it.
   $("launch").hidden = state.daemonUp;
-  for (const id of ["permission", "downloads-section", "page", "audio", "media-section"]) {
+  for (const id of ["permission", "downloads-section", "page", "media-section"]) {
     if (!state.daemonUp) $(id).hidden = true;
   }
   if (!state.daemonUp) {
@@ -352,8 +361,6 @@ async function refresh() {
   $("permission").hidden = !state.needsPermission;
   const web = /^https?:/i.test(tab?.url || "");
   $("page").hidden = !web;
-  $("audio").hidden = !web;
-  $("gif").hidden = !web;
   renderMedia(state.media || []);
   followInspections(state.media || []);
   if (web) checkPage();

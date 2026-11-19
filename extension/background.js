@@ -199,10 +199,32 @@ function isFragment(url, path) {
   return /[?&](range|bytes|byterange)=\d/i.test(url);
 }
 
+/**
+ * Instagram and Facebook (fbcdn) play whole MP4 files in byte ranges named in the
+ * URL (bytestart=…&byteend=…): without them the same address serves the whole file.
+ * `null` for other URLs.
+ */
+function wholeFileUrl(url) {
+  if (!/[?&]bytestart=\d/.test(url)) return null;
+  try {
+    const u = new URL(url);
+    u.searchParams.delete("bytestart");
+    u.searchParams.delete("byteend");
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
 function classify(d) {
   const mime = (header(d.responseHeaders, "content-type") || "").split(";")[0].trim().toLowerCase();
   let path = "";
   try { path = new URL(d.url).pathname.toLowerCase(); } catch { return null; }
+  // Every range of the file maps to the one whole-file address (listed once); its
+  // size is unknown until downloaded.
+  const whole = wholeFileUrl(d.url);
+  if (whole) return mime.startsWith("video/") || mime.startsWith("audio/") ? { kind: "file", mime, size: null, url: whole } : null;
   if (isFragment(d.url, path)) return null;
   if (path.endsWith(".m3u8") || mime.includes("mpegurl")) return { kind: "hls", mime, size: null };
   if (path.endsWith(".mpd") || mime === "application/dash+xml") return { kind: "dash", mime, size: null };
@@ -285,11 +307,11 @@ api.webRequest.onHeadersReceived.addListener(
     const found = classify(d);
     if (!found) return;
     const list = media.get(d.tabId) ?? [];
-    const bare = d.url.split("#")[0];
+    const bare = (found.url ?? d.url).split("#")[0];
     if (list.some((m) => m.url === bare)) return;
     // null = the browser sent no Referer, and the server accepted that.
     const referer = sent !== undefined ? sent : (d.documentUrl ?? d.initiator ?? null);
-    const item = { url: bare, ...found, referer, aliases: origin && origin !== bare ? [origin] : [] };
+    const item = { ...found, url: bare, referer, aliases: origin && origin !== bare ? [origin] : [] };
     // A <video> found by the page scan that turns out to redirect here is the same video.
     saveTab(d.tabId, list.filter((m) => !(m.fromPage && item.aliases.includes(m.url))).concat(item));
     if (item.kind === "hls") inspectStream(d.tabId, item);
@@ -416,26 +438,68 @@ function flashBadge() {
 api.runtime.onInstalled.addListener(async () => {
   await api.contextMenus.removeAll();
   api.contextMenus.create({ id: "raudo-link", title: "Descargar enlace con Boost", contexts: ["link"] });
-  api.contextMenus.create({ id: "raudo-media", title: "Descargar este medio con Boost", contexts: ["video", "audio"] });
+  // On a video or audio: one entry per thing it can become, for that very player.
+  api.contextMenus.create({ id: "raudo-media", title: "Boost", contexts: ["video", "audio"] });
+  api.contextMenus.create({ id: "raudo-media-video", parentId: "raudo-media", title: "Descargar vídeo (MP4)", contexts: ["video"] });
+  api.contextMenus.create({ id: "raudo-media-audio", parentId: "raudo-media", title: "Descargar audio", contexts: ["audio"] });
+  api.contextMenus.create({ id: "raudo-media-mp3", parentId: "raudo-media", title: "Solo el audio en MP3", contexts: ["video", "audio"] });
+  api.contextMenus.create({ id: "raudo-media-gif", parentId: "raudo-media", title: "GIF animado desde este momento", contexts: ["video"] });
   api.contextMenus.create({ id: "raudo-page", title: "Descargar vídeo de esta página con Boost", contexts: ["page"] });
 });
+
+/** Where the clicked player is (seconds), so a GIF starts at what the user sees. */
+async function playerTime(tabId, frameId, src) {
+  try {
+    const [r] = await api.scripting.executeScript({
+      target: { tabId, frameIds: [frameId ?? 0] },
+      func: (src) => [...document.querySelectorAll("video, audio")].find((v) => v.currentSrc === src || v.src === src)?.currentTime ?? null,
+      args: [src],
+    });
+    return r?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The MP3 and GIF settings chosen in the popup. */
+async function savedOptions() {
+  const v = await api.storage.local.get(["mp3Kbps", "gifPreset", "gifSeconds"]).catch(() => ({}));
+  return {
+    audioKbps: v.mp3Kbps ?? 192,
+    gif: { preset: v.gifPreset ?? "balanced", duration: v.gifSeconds === 0 ? null : (v.gifSeconds ?? 10) },
+  };
+}
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!config) await hello();
   try {
     if (info.menuItemId === "raudo-link") {
       await sendDownload({ url: info.linkUrl, referer: info.pageUrl });
-    } else if (info.menuItemId === "raudo-media" && /^https?:/i.test(info.srcUrl || "")) {
+      return;
+    }
+    if (info.menuItemId === "raudo-page") {
+      await sendDownload({ url: info.pageUrl || tab?.url, video: true });
+      return;
+    }
+    const opts = await savedOptions();
+    const extra = {};
+    if (info.menuItemId === "raudo-media-mp3") Object.assign(extra, { video: true, audioKbps: opts.audioKbps });
+    if (info.menuItemId === "raudo-media-gif") {
+      const at = await playerTime(tab?.id, info.frameId, info.srcUrl);
+      Object.assign(extra, { video: true, gif: { ...opts.gif, start: at ? Math.floor(at) : null } });
+    }
+    if (/^https?:/i.test(info.srcUrl || "")) {
       await sendDownload({
         url: info.srcUrl,
         referer: info.frameUrl || info.pageUrl,
         title: tab?.title ?? null,
         page: info.pageUrl ?? null,
         video: /\.(m3u8|mpd)(\?|$)/i.test(info.srcUrl),
+        ...extra,
       });
     } else {
-      // blob:/MediaSource players or the page itself: let yt-dlp resolve the page.
-      await sendDownload({ url: info.pageUrl || tab?.url, video: true });
+      // blob:/MediaSource players: let yt-dlp resolve the page.
+      await sendDownload({ url: info.pageUrl || tab?.url, video: true, ...extra });
     }
   } catch (e) {
     console.warn("raudo:", e.message);
@@ -486,6 +550,26 @@ api.runtime.onMessage.addListener((msg, _sender, reply) => {
     }
     if (msg.type === "launch") {
       return { running: await launchBoost() };
+    }
+    if (msg.type === "locate") {
+      // Outline the player of this media in every frame of the tab and scroll to it.
+      const results = await api.scripting.executeScript({
+        target: { tabId: msg.tabId, allFrames: true },
+        func: (url) => {
+          const same = (a) => a && a.split("#")[0] === url.split("#")[0];
+          const el = [...document.querySelectorAll("video, audio")].find((v) =>
+            same(v.currentSrc) || same(v.src) || [...v.querySelectorAll("source")].some((s) => same(s.src)));
+          if (!el) return false;
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          const before = el.style.outline;
+          el.style.outline = "4px solid #2f6fde";
+          el.style.outlineOffset = "-4px";
+          setTimeout(() => { el.style.outline = before; }, 2500);
+          return true;
+        },
+        args: [msg.url],
+      }).catch(() => []);
+      return results.some((r) => r.result);
     }
     if (msg.type === "media") {
       // Light refresh while stream inspections finish; no page scan.

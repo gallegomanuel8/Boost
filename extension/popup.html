@@ -8,18 +8,21 @@
     @media (prefers-color-scheme: dark) {
       :root { --fg: #f2f2f5; --muted: #a0a0a8; --bg: #1f1f23; --line: #3a3a40; --track: #33333a; --accent: #6b9cff; --err: #ff7b6e; --ok: #5fd38a; }
     }
-    body { font: 13px/1.4 system-ui, sans-serif; color: var(--fg); background: var(--bg); margin: 0; width: 380px; }
-    header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-    header img { width: 20px; height: 20px; }
-    header h1 { font-size: 14px; margin: 0; flex: 1; }
-    #status { font-size: 12px; color: var(--muted); }
+    body { font: 12px/1.35 system-ui, sans-serif; color: var(--fg); background: var(--bg); margin: 0; width: 340px; }
+    header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+    header img { width: 16px; height: 16px; }
+    header h1 { font-size: 13px; margin: 0; flex: 1; }
+    #status { font-size: 11px; color: var(--muted); }
     #status.ok { color: var(--ok); } #status.err { color: var(--err); }
-    section { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    section { padding: 7px 10px; border-bottom: 1px solid var(--line); }
     section:last-child { border-bottom: 0; }
-    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; }
-    ul { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
-    li { padding: 5px 0; }
-    .line { display: flex; align-items: center; gap: 6px; }
+    h2 { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 5px; }
+    ul { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; }
+    li { padding: 3px 0; border-top: 1px solid var(--line); }
+    li:first-child { border-top: 0; }
+    .line { display: flex; align-items: center; gap: 4px; }
+    .num { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.4em; }
+    .name.locate { cursor: pointer; } .name.locate:hover { text-decoration: underline; }
     .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .meta { color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
     .bar { height: 4px; background: var(--track); border-radius: 2px; margin-top: 4px; overflow: hidden; }
@@ -28,14 +31,20 @@
     @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
     .done .bar > div { background: var(--ok); }
     .failed .meta { color: var(--err); }
-    button { font: inherit; border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+    button { font: inherit; border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 5px; padding: 2px 7px; cursor: pointer; }
+    .line button { padding: 1px 6px; font-size: 11px; }
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     button:disabled { opacity: .5; cursor: default; }
-    .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-    select, input[type=number] { font: inherit; min-width: 0; padding: 2px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+    .row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+    #formats-row, #page-hint { margin-top: 5px; }
+    details { margin-top: 6px; } summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+    .grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin: 6px 0 4px; }
+    .grid label { color: var(--muted); }
+    #gif-from { width: 4.5em; }
+    select, input[type=number] { font: inherit; min-width: 0; padding: 1px 2px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
     #formats { flex: 1; }
-    .empty, .hint { color: var(--muted); margin: 0; }
-    #msg { font-size: 12px; min-height: 1em; }
+    .empty, .hint { color: var(--muted); margin: 0; font-size: 11px; }
+    #msg { font-size: 11px; min-height: 1em; }
     #msg.err { color: var(--err); } #msg.ok { color: var(--ok); }
     [hidden] { display: none !important; }
   </style>
@@ -63,62 +72,55 @@
   </section>
 
   <section id="page">
-    <h2>Vídeo de esta página</h2>
+    <h2>Esta página</h2>
     <div class="row">
-      <button id="page-best" class="primary">Descargar vídeo</button>
-      <button id="page-formats">Elegir calidad…</button>
+      <button id="page-best" class="primary" title="Descargar el vídeo en la mejor calidad">Vídeo</button>
+      <button id="page-mp3" title="Solo el audio, en MP3">MP3</button>
+      <button id="page-gif" title="GIF animado (ajustes abajo)">GIF</button>
+      <button id="page-formats" title="Elegir resolución y formato">Calidad…</button>
     </div>
-    <div class="row" id="formats-row" hidden style="margin-top:6px">
+    <div class="row" id="formats-row" hidden>
       <select id="formats"></select>
       <button id="formats-go" class="primary">Descargar</button>
     </div>
-    <p class="hint" id="page-hint" hidden style="margin-top:6px">Usa yt-dlp: funciona en YouTube y cientos de webs.</p>
-  </section>
-
-  <section id="audio">
-    <h2>Audio de esta página</h2>
-    <div class="row">
-      <button id="page-mp3" class="primary">Descargar audio MP3</button>
-      <label for="mp3-quality" class="hint">Calidad</label>
-      <select id="mp3-quality">
-        <option value="128">128 kbps</option>
-        <option value="192" selected>192 kbps</option>
-        <option value="256">256 kbps</option>
-        <option value="320">320 kbps</option>
-        <option value="0">Máxima (VBR)</option>
-      </select>
-    </div>
-    <p class="hint" style="margin-top:6px">Extrae solo la pista de audio del vídeo y la convierte a MP3.</p>
-    <p class="hint" id="audio-hint" hidden></p>
-  </section>
-
-  <section id="gif">
-    <h2>GIF animado</h2>
-    <div class="row">
-      <button id="page-gif" class="primary">Crear GIF del vídeo</button>
-      <select id="gif-preset" title="Calidad del GIF">
-        <option value="light">Ligero · 320 px, 10 fps</option>
-        <option value="balanced" selected>Equilibrado · 480 px, 20 fps</option>
-        <option value="high">Alta · 640 px, 25 fps</option>
-      </select>
-    </div>
-    <div class="row" style="margin-top:6px">
-      <label for="gif-from" class="hint">Desde el segundo</label>
-      <input id="gif-from" type="number" min="0" step="1" value="0" style="width:5em">
-      <label for="gif-seconds" class="hint">durante</label>
-      <select id="gif-seconds">
-        <option value="5">5 s</option>
-        <option value="10" selected>10 s</option>
-        <option value="15">15 s</option>
-        <option value="30">30 s</option>
-        <option value="0">todo el vídeo</option>
-      </select>
-    </div>
-    <p class="hint" style="margin-top:6px">Sin sonido. Un GIF pesa mucho más que el vídeo: mejor clips cortos. El botón GIF de cada medio detectado usa estos ajustes.</p>
+    <p class="hint" id="page-hint" hidden></p>
+    <details id="opts">
+      <summary>Ajustes de MP3 y GIF</summary>
+      <div class="grid">
+        <label for="mp3-quality">MP3</label>
+        <select id="mp3-quality">
+          <option value="128">128 kbps</option>
+          <option value="192" selected>192 kbps</option>
+          <option value="256">256 kbps</option>
+          <option value="320">320 kbps</option>
+          <option value="0">Máxima (VBR)</option>
+        </select>
+        <label for="gif-preset">GIF</label>
+        <select id="gif-preset">
+          <option value="light">Ligero · 320 px, 10 fps</option>
+          <option value="balanced" selected>Equilibrado · 480 px, 20 fps</option>
+          <option value="high">Alta · 640 px, 25 fps</option>
+        </select>
+        <label for="gif-from">Desde</label>
+        <span class="row">
+          <input id="gif-from" type="number" min="0" step="1" value="0" title="Segundo del vídeo">
+          <span class="hint">s, durante</span>
+          <select id="gif-seconds">
+            <option value="5">5 s</option>
+            <option value="10" selected>10 s</option>
+            <option value="15">15 s</option>
+            <option value="30">30 s</option>
+            <option value="0">todo</option>
+          </select>
+        </span>
+      </div>
+      <p class="hint">El GIF no lleva sonido y pesa más que el vídeo: mejor fragmentos cortos.</p>
+    </details>
   </section>
 
   <section id="media-section">
     <h2>Medios detectados</h2>
+    <p class="hint" id="media-tip" hidden>Pulsa un nombre para ver cuál es en la página, o haz clic derecho sobre el vídeo → Boost.</p>
     <ul id="media"></ul>
     <p class="empty" id="media-empty"></p>
   </section>

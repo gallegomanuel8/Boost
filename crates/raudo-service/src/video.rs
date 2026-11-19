@@ -206,7 +206,63 @@ pub fn clean_stem(title: &str) -> String {
     if stem.is_empty() { "video".into() } else { stem.to_owned() }
 }
 
-fn context_args(req: &Request) -> Vec<String> {
+/// The browser's cookies for yt-dlp, as a Netscape cookie file that lives as
+/// long as this value. A `Cookie` header is not enough: yt-dlp scopes it to the
+/// page's exact host, so extractors that call the site's API on another host
+/// (Instagram: i.instagram.com) run without the session and fail.
+pub(crate) struct CookieFile(PathBuf);
+
+impl CookieFile {
+    /// `None` when the request carries no cookies.
+    pub(crate) fn write(req: &Request, path: PathBuf) -> std::io::Result<Option<Self>> {
+        let Some(cookies) = req.cookies.as_deref().filter(|c| !c.trim().is_empty()) else { return Ok(None) };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut open = std::fs::OpenOptions::new();
+        open.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+        let mut f = open.open(&path)?;
+        std::io::Write::write_all(&mut f, cookie_file_text(&req.url, cookies).as_bytes())?;
+        Ok(Some(Self(path)))
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for CookieFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// `a=1; b=2` sent to `url` → cookie file lines for the site and its subdomains
+/// (www. dropped), as session cookies.
+fn cookie_file_text(url: &str, cookies: &str) -> String {
+    let parsed = url::Url::parse(url).ok();
+    let host = parsed.as_ref().and_then(|u| u.host_str()).unwrap_or_default();
+    let domain = host.strip_prefix("www.").unwrap_or(host);
+    let secure = if parsed.as_ref().is_some_and(|u| u.scheme() == "https") { "TRUE" } else { "FALSE" };
+    let mut out = String::from("# Netscape HTTP Cookie File\n");
+    for (name, value) in cookies.split(';').filter_map(|c| c.trim().split_once('=')) {
+        // Tabs and newlines would break the file's columns.
+        if [name, value].iter().any(|s| s.contains(['\t', '\n', '\r'])) {
+            continue;
+        }
+        out.push_str(&format!(".{domain}\tTRUE\t/\t{secure}\t0\t{name}\t{value}\n"));
+    }
+    out
+}
+
+/// Where a download's cookie file goes (its temp dir, removed with it).
+fn cookie_path(temp_dir: &Path) -> PathBuf {
+    temp_dir.join("cookies.txt")
+}
+
+fn context_args(req: &Request, cookie_file: Option<&Path>) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(r) = &req.referer {
         a.extend(["--referer".into(), r.clone()]);
@@ -214,9 +270,8 @@ fn context_args(req: &Request) -> Vec<String> {
     if let Some(ua) = &req.user_agent {
         a.extend(["--user-agent".into(), ua.clone()]);
     }
-    // yt-dlp scopes a Cookie header to the URL's domain before using it.
-    if let Some(c) = &req.cookies {
-        a.extend(["--add-header".into(), format!("Cookie:{c}")]);
+    if let Some(f) = cookie_file {
+        a.extend(["--cookies".into(), f.display().to_string()]);
     }
     for (k, v) in &req.headers {
         a.extend(["--add-header".into(), format!("{k}:{v}")]);
@@ -281,7 +336,8 @@ pub fn download_args(job: &VideoJob) -> Vec<String> {
     if let Some(r) = job.rate_limit {
         a.extend(["--limit-rate".into(), r.to_string()]);
     }
-    a.extend(context_args(job.request));
+    let cookies = job.request.cookies.as_ref().map(|_| cookie_path(job.temp_dir));
+    a.extend(context_args(job.request, cookies.as_deref()));
     a.push("--".into());
     a.push(job.request.url.clone());
     a
@@ -386,6 +442,8 @@ pub async fn run(
     mut on_progress: impl FnMut(Progress),
     mut cancel: watch::Receiver<bool>,
 ) -> Result<VideoOutcome, String> {
+    // Kept until yt-dlp is done; the path is the one download_args names.
+    let _cookies = CookieFile::write(job.request, cookie_path(job.temp_dir)).map_err(|e| format!("cannot write cookies: {e}"))?;
     let mut child = command(ytdlp_bin())
         .args(download_args(&job))
         .stdin(Stdio::null())
@@ -550,10 +608,14 @@ fn interrupt(child: &mut tokio::process::Child) {
 }
 
 pub async fn formats(req: &Request) -> Result<MediaInfo, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = raudo_ipc::paths::runtime_dir().join(format!("cookies-{}-{n}.txt", std::process::id()));
+    let cookies = CookieFile::write(req, path).map_err(|e| format!("cannot write cookies: {e}"))?;
     let out = command(ytdlp_bin())
         .args(["-J", "--no-playlist", "--no-warnings"])
         .args(js_runtime_args())
-        .args(context_args(req))
+        .args(context_args(req, cookies.as_ref().map(CookieFile::path)))
         .arg("--")
         .arg(&req.url)
         .stdin(Stdio::null())
@@ -645,7 +707,8 @@ mod tests {
         assert!(has("--encoding", "utf-8"));
         assert!(has("-o", "100%% real.%(ext)s"));
         assert!(has("--limit-rate", "1000"));
-        assert!(has("--add-header", "Cookie:a=1; b=2"));
+        assert!(has("--cookies", "/tmp/t/cookies.txt"));
+        assert!(!a.iter().any(|x| x.starts_with("Cookie:")));
         assert!(has("--referer", "https://example.org/"));
         // URL after `--`, so a URL starting with '-' can never become an option.
         assert_eq!(&a[a.len() - 2..], ["--", "https://example.org/v"]);
@@ -662,6 +725,26 @@ mod tests {
         // The GIF wins over MP3, and only its seconds are fetched.
         assert!(has("-f", "bv*[height<=720]/b[height<=720]/bv*/b") && has("--download-sections", "*12.5-17.5"));
         assert!(!a.iter().any(|x| x == "--audio-format"));
+    }
+
+    #[test]
+    fn cookies_become_a_cookie_file_for_the_whole_site() {
+        let text = cookie_file_text("https://www.instagram.com/p/x/", "csrftoken=abc; sessionid=1%3Ax; bad");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "# Netscape HTTP Cookie File");
+        assert_eq!(lines[1], ".instagram.com\tTRUE\t/\tTRUE\t0\tcsrftoken\tabc");
+        assert_eq!(lines[2], ".instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\t1%3Ax");
+        assert_eq!(lines.len(), 3);
+
+        let dir = std::env::temp_dir().join(format!("raudo-cookie-test-{}", std::process::id()));
+        let req = Request { url: "https://example.org/".into(), cookies: Some("a=1".into()), ..Default::default() };
+        let file = CookieFile::write(&req, dir.join("c.txt")).unwrap().unwrap();
+        let path = file.path().to_path_buf();
+        assert!(std::fs::read_to_string(&path).unwrap().contains(".example.org\tTRUE\t/\tTRUE\t0\ta\t1"));
+        drop(file);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir(dir);
+        assert!(CookieFile::write(&Request::default(), std::env::temp_dir().join("never.txt")).unwrap().is_none());
     }
 
     #[test]
